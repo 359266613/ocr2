@@ -5,6 +5,8 @@
 
 #import <UIKit/UIKit.h>
 
+NS_ASSUME_NONNULL_BEGIN
+
 @interface OCRResultViewController : UIViewController
 
 /// 抓整屏 → 弹浮层 → 自动识别
@@ -14,3 +16,5 @@
 + (instancetype)presentWithImage:(UIImage *)image hostWindow:(UIWindow *)window;
 
 @end
+
+NS_ASSUME_NONNULL_END

@@ -7,7 +7,9 @@
 
 #import <UIKit/UIKit.h>
 
-typedef void (^OCRTextCompletion)(NSString *text, NSError *error);
+NS_ASSUME_NONNULL_BEGIN
+
+typedef void (^OCRTextCompletion)(NSString * _Nullable text, NSError * _Nullable error);
 
 @interface OCREngine : NSObject
 
@@ -16,8 +18,10 @@ typedef void (^OCRTextCompletion)(NSString *text, NSError *error);
 
 /// languages 传 nil 表示交给系统自动判断（iOS 16+）或使用系统全部支持语言
 + (void)recognizeImage:(UIImage *)image
-             languages:(NSArray<NSString *> *)languages
+             languages:(nullable NSArray<NSString *> *)languages
               fastMode:(BOOL)fastMode
             completion:(OCRTextCompletion)completion;
 
 @end
+
+NS_ASSUME_NONNULL_END

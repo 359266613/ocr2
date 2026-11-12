@@ -7,6 +7,8 @@
 
 #import <UIKit/UIKit.h>
 
+NS_ASSUME_NONNULL_BEGIN
+
 /// 抓取整屏图像（含状态栏）。
 /// 优先调用私有 _UICreateScreenUIImage()，失败时回退为渲染当前 key window。
 UIImage * _Nullable OCRCaptureScreen(void);
@@ -16,3 +18,5 @@ UIImage * _Nullable OCRCropImage(UIImage *image, CGRect normalizedRect);
 
 /// 取当前 key window（兼容多 scene）
 UIWindow * _Nullable OCRKeyWindow(void);
+
+NS_ASSUME_NONNULL_END
