@@ -55,7 +55,7 @@ static NSString *OCRTextFromResults(NSArray *results) {
     for (id object in results) {
         if (![object isKindOfClass:[VNRecognizedTextObservation class]]) continue;
         VNRecognizedTextObservation *observation = (VNRecognizedTextObservation *)object;
-        if (observation.topCandidates(1).count == 0) continue;
+        if ([observation topCandidates:1].count == 0) continue;
         [observations addObject:observation];
     }
 
@@ -73,7 +73,7 @@ static NSString *OCRTextFromResults(NSArray *results) {
 
     NSMutableString *text = [NSMutableString string];
     for (VNRecognizedTextObservation *observation in observations) {
-        NSString *line = observation.topCandidates(1).firstObject.string;
+        NSString *line = [observation topCandidates:1].firstObject.string;
         if (!line.length) continue;
         if (text.length) [text appendString:@"\n"];
         [text appendString:line];
