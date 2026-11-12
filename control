@@ -1,0 +1,9 @@
+Package: com.yourname.screenocr
+Name: ScreenOCR
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: 全屏 OCR 文字识别提取，双指长按触发，识别结果可编辑 / 复制 / 分享
+Maintainer: yourname
+Author: yourname
+Section: Tweaks
+Depends: mobilesubstrate, firmware (>= 15.0)
