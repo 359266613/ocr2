@@ -5,10 +5,33 @@
 
 #import "OCRCapture.h"
 #import "OCRConfig.h"
+#import <dlfcn.h>
 
 // UIKit 私有函数：抓整屏，返回包含状态栏 / 键盘 / 所有窗口的图像。
-// 在越狱注入的 App 进程内可直接使用，比 drawViewHierarchyInRect 更完整。
-extern UIImage *_UICreateScreenUIImage(void) __attribute__((weak_import));
+// 用 dlsym 取而不是直接声明，符号不存在时只是截不到图，不会加载失败。
+typedef UIImage *(*OCRScreenUIImageFunc)(void);
+typedef CGImageRef (*OCRScreenImageFunc)(void);
+
+static OCRScreenUIImageFunc OCRScreenUIImage(void) {
+    static OCRScreenUIImageFunc function;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        function = (OCRScreenUIImageFunc)dlsym(RTLD_DEFAULT, "_UICreateScreenUIImage");
+        if (!function) {
+            OCRLog(@"private _UICreateScreenUIImage not found, will fall back");
+        }
+    });
+    return function;
+}
+
+static OCRScreenImageFunc OCRScreenCGImage(void) {
+    static OCRScreenImageFunc function;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        function = (OCRScreenImageFunc)dlsym(RTLD_DEFAULT, "UIGetScreenImage");
+    });
+    return function;
+}
 
 UIWindow *OCRKeyWindow(void) {
     UIWindow *fallback = nil;
@@ -32,22 +55,44 @@ UIWindow *OCRKeyWindow(void) {
 }
 
 UIImage *OCRCaptureScreen(void) {
-    // 1. 私有 API：整屏抓图
-    if (_UICreateScreenUIImage) {
+    // 1. 私有 API：整屏抓图（含状态栏、键盘、其他进程内容）
+    OCRScreenUIImageFunc createImage = OCRScreenUIImage();
+    if (createImage) {
         @try {
-            UIImage *image = _UICreateScreenUIImage();
+            UIImage *image = createImage();
             if (image.CGImage) {
                 OCRLog(@"capture via _UICreateScreenUIImage, size=%@", NSStringFromCGSize(image.size));
                 return image;
             }
+            OCRLog(@"capture: _UICreateScreenUIImage returned empty image");
         } @catch (NSException *exception) {
             OCRLog(@"capture exception: %@", exception);
         }
     }
 
-    // 2. 回退：渲染当前 key window（拿不到状态栏，但正文完整）
+    // 2. 老接口兜底
+    OCRScreenImageFunc createCGImage = OCRScreenCGImage();
+    if (createCGImage) {
+        @try {
+            CGImageRef cgImage = createCGImage();
+            if (cgImage) {
+                UIImage *image = [UIImage imageWithCGImage:cgImage];
+                CGImageRelease(cgImage);
+                OCRLog(@"capture via UIGetScreenImage, size=%@", NSStringFromCGSize(image.size));
+                return image;
+            }
+        } @catch (NSException *exception) {
+            OCRLog(@"capture exception (UIGetScreenImage): %@", exception);
+        }
+    }
+
+    // 3. 最后回退：渲染当前 key window。
+    //    注意在 SpringBoard 里渲染自己的窗口拿不到前台 App 的内容，可能是一张空图。
     UIWindow *window = OCRKeyWindow();
-    if (!window) return nil;
+    if (!window) {
+        OCRLog(@"capture: no key window");
+        return nil;
+    }
 
     UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat defaultFormat];
     format.scale = UIScreen.mainScreen.scale;
@@ -58,7 +103,7 @@ UIImage *OCRCaptureScreen(void) {
     UIImage *image = [renderer imageWithActions:^(UIGraphicsImageRendererContext *ctx) {
         [window drawViewHierarchyInRect:window.bounds afterScreenUpdates:NO];
     }];
-    OCRLog(@"capture via window render, size=%@", NSStringFromCGSize(image.size));
+    OCRLog(@"capture via window render (may be blank), size=%@", NSStringFromCGSize(image.size));
     return image;
 }
 

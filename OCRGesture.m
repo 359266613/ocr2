@@ -2,10 +2,13 @@
 //  OCRGesture.m
 //  ScreenOCR
 //
+//  只做「识别手势 → 发一条深链接」这一件事。
+//  截图 / Vision / 浮层全部交给 SpringBoard 进程，注入的 App 里不跑重活。
+//
 
 #import "OCRGesture.h"
 #import "OCRConfig.h"
-#import "OCRResultViewController.h"
+#import "OCRTrigger.h"
 #import <objc/runtime.h>
 
 static const void *kOCRGestureKey = &kOCRGestureKey;
@@ -26,14 +29,14 @@ static const void *kOCRGestureKey = &kOCRGestureKey;
 
 - (void)attachToWindow:(UIWindow *)window {
     if (!window) return;
+    if (OCRIsSpringBoard()) return;          // SpringBoard 里不挂，触摸到不了这里
     if (!OCRProcessIsHostApp()) return;
 
-    // 只挂普通窗口：跳过状态栏、键盘、以及我们自己的浮层
+    // 只挂普通窗口：跳过状态栏、键盘、以及各种浮层
     if (window.windowLevel != UIWindowLevelNormal) return;
-    if (!window.isKeyWindow) return;
     if (objc_getAssociatedObject(window, kOCRGestureKey)) return;
 
-    NSString *bundleID = [NSBundle mainBundle].bundleIdentifier ?: @"";
+    NSString *bundleID = OCRCurrentBundleID();
     if ([OCRBundleBlacklist() containsObject:bundleID]) return;
 
     UILongPressGestureRecognizer *gesture =
@@ -49,18 +52,31 @@ static const void *kOCRGestureKey = &kOCRGestureKey;
     [window addGestureRecognizer:gesture];
     objc_setAssociatedObject(window, kOCRGestureKey, gesture, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-    OCRLog(@"gesture attached to %@ (%@)", window, bundleID);
+    OCRLog(@"gesture attached: %@ key=%d level=%.1f window=%@",
+           bundleID, window.isKeyWindow, window.windowLevel, NSStringFromClass(window.class));
 }
 
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state != UIGestureRecognizerStateBegan) return;
+
+    OCRLog(@"gesture triggered in %@", OCRCurrentBundleID());
 
     UIImpactFeedbackGenerator *feedback =
         [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
     [feedback prepare];
     [feedback impactOccurred];
 
-    [OCRResultViewController captureAndPresentFromWindow:gesture.view.window];
+    // 交给 SpringBoard 处理：走 openURL → SB 的 applicationOpenURL: / openURL: 被 hook 到
+    NSString *link = [NSString stringWithFormat:@"prefs:root=%@", OCRTriggerToken()];
+    NSURL *url = [NSURL URLWithString:link];
+    if (!url) {
+        OCRLog(@"gesture: bad trigger url %@", link);
+        return;
+    }
+
+    [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:^(BOOL success) {
+        OCRLog(@"gesture: openURL %@ -> %d", link, success);
+    }];
 }
 
 #pragma mark - UIGestureRecognizerDelegate

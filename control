@@ -1,8 +1,8 @@
 Package: com.359266613.screenocr
 Name: ScreenOCR
-Version: 1.0.0
+Version: 2.0.0
 Architecture: iphoneos-arm
-Description: 全屏 OCR 文字识别提取，双指长按触发，识别结果可编辑 / 复制 / 分享
+Description: 全屏 OCR 文字识别。深链接触发 prefs:root=axsocr_recognize（可绑 GesturePro 手势），也支持双指长按；结果可编辑 / 复制 / 框选 / 分享。
 Maintainer: 359266613
 Author: 359266613
 Section: Tweaks

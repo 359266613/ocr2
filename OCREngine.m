@@ -2,93 +2,145 @@
 //  OCREngine.m
 //  ScreenOCR
 //
+//  Vision 不在本进程里跑：SpringBoard 里加载文字识别模型会在 AppleNeuralEngine
+//  里崩（SIGTRAP，直接 safemode）。所以截图存成 png，交给 /usr/libexec/ScreenOCRHelper
+//  这个独立进程识别，它崩了只会让这一次识别失败。
+//
 
 #import "OCREngine.h"
 #import "OCRConfig.h"
-#import <Vision/Vision.h>
-#import <ImageIO/ImageIO.h>
+#import <UIKit/UIKit.h>
+#import <errno.h>
+#import <fcntl.h>
+#import <poll.h>
+#import <signal.h>
+#import <spawn.h>
+#import <sys/wait.h>
+#import <unistd.h>
 
-#pragma mark - 工具函数
+extern char **environ;
 
-static CGImagePropertyOrientation OCRCGImageOrientation(UIImageOrientation orientation) {
-    switch (orientation) {
-        case UIImageOrientationDown:            return kCGImagePropertyOrientationDown;
-        case UIImageOrientationLeft:            return kCGImagePropertyOrientationLeft;
-        case UIImageOrientationRight:           return kCGImagePropertyOrientationRight;
-        case UIImageOrientationUpMirrored:      return kCGImagePropertyOrientationUpMirrored;
-        case UIImageOrientationDownMirrored:    return kCGImagePropertyOrientationDownMirrored;
-        case UIImageOrientationLeftMirrored:    return kCGImagePropertyOrientationLeftMirrored;
-        case UIImageOrientationRightMirrored:   return kCGImagePropertyOrientationRightMirrored;
-        case UIImageOrientationUp:
-        default:                                return kCGImagePropertyOrientationUp;
-    }
-}
+static NSString * const OCRErrorDomain = @"ScreenOCR";
 
-/// 当前设备 Vision 真正支持的语言列表（缓存一次）
-static NSArray<NSString *> *OCRSupportedLanguages(void) {
-    static NSArray<NSString *> *languages;
+/// helper 的候选路径：rootless / roothide 在 /var/jb，rootful 在真实根
+static NSString *OCRHelperPath(void) {
+    static NSString *path;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        VNRecognizeTextRequest *probe = [[VNRecognizeTextRequest alloc] init];
-        NSError *error = nil;
-        NSArray<NSString *> *list = [probe supportedRecognitionLanguagesAndReturnError:&error];
-        languages = list ?: @[ @"en-US" ];
-        OCRLog(@"supported languages: %@", languages);
-    });
-    return languages;
-}
-
-static NSArray<NSString *> *OCRFilterLanguages(NSArray<NSString *> *requested) {
-    NSArray<NSString *> *supported = OCRSupportedLanguages();
-    if (!requested.count) return supported;
-
-    NSMutableArray<NSString *> *valid = [NSMutableArray array];
-    for (NSString *language in requested) {
-        if ([supported containsObject:language]) [valid addObject:language];
-    }
-    return valid.count ? valid : supported;
-}
-
-/// 把 Vision 的观察结果按「从上到下、从左到右」拼成文本
-static NSString *OCRTextFromResults(NSArray *results) {
-    NSMutableArray<VNRecognizedTextObservation *> *observations = [NSMutableArray array];
-    for (id object in results) {
-        if (![object isKindOfClass:[VNRecognizedTextObservation class]]) continue;
-        VNRecognizedTextObservation *observation = (VNRecognizedTextObservation *)object;
-        if ([observation topCandidates:1].count == 0) continue;
-        [observations addObject:observation];
-    }
-
-    [observations sortUsingComparator:^NSComparisonResult(VNRecognizedTextObservation *lhs,
-                                                          VNRecognizedTextObservation *rhs) {
-        CGRect left = lhs.boundingBox;
-        CGRect right = rhs.boundingBox;
-        // boundingBox 原点在左下角，midY 越大越靠上
-        CGFloat deltaY = CGRectGetMidY(left) - CGRectGetMidY(right);
-        if (fabs(deltaY) > 0.012) {
-            return deltaY > 0 ? NSOrderedAscending : NSOrderedDescending;
+        NSArray<NSString *> *candidates = @[
+            @"/var/jb/usr/libexec/ScreenOCRHelper",
+            @"/usr/libexec/ScreenOCRHelper",
+        ];
+        for (NSString *candidate in candidates) {
+            if (access(candidate.fileSystemRepresentation, X_OK) == 0) {
+                path = candidate;
+                break;
+            }
         }
-        return CGRectGetMinX(left) <= CGRectGetMinX(right) ? NSOrderedAscending : NSOrderedDescending;
-    }];
-
-    NSMutableString *text = [NSMutableString string];
-    for (VNRecognizedTextObservation *observation in observations) {
-        NSString *line = [observation topCandidates:1].firstObject.string;
-        if (!line.length) continue;
-        if (text.length) [text appendString:@"\n"];
-        [text appendString:line];
-    }
-    return text.copy;
-}
-
-static void OCRDeliver(NSString *text, NSError *error, OCRTextCompletion completion) {
-    if (!completion) return;
-    dispatch_async(dispatch_get_main_queue(), ^{
-        completion(text, error);
     });
+    return path;
 }
 
-#pragma mark - OCREngine
+static NSError *OCRError(NSInteger code, NSString *message) {
+    return [NSError errorWithDomain:OCRErrorDomain
+                               code:code
+                           userInfo:@{NSLocalizedDescriptionKey: message ?: @"识别失败"}];
+}
+
+/// 跑一次 helper，返回 stdout 文本；失败时返回 nil 并设置 error
+static NSString *OCRRunHelper(NSString *imagePath, BOOL allowAnyDevice, NSError **error) {
+    NSString *helper = OCRHelperPath();
+    if (!helper) {
+        OCRLog(@"helper missing (looked in /var/jb/usr/libexec and /usr/libexec)");
+        if (error) *error = OCRError(10, @"找不到识别组件，请重新安装插件");
+        return nil;
+    }
+
+    int outPipe[2];
+    if (pipe(outPipe) != 0) {
+        if (error) *error = OCRError(11, @"无法创建管道");
+        return nil;
+    }
+    fcntl(outPipe[0], F_SETFD, FD_CLOEXEC);
+    fcntl(outPipe[1], F_SETFD, FD_CLOEXEC);
+
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_init(&actions);
+    posix_spawn_file_actions_adddup2(&actions, outPipe[1], STDOUT_FILENO);
+    posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+
+    const char *helperPath = helper.fileSystemRepresentation;
+    const char *argv[] = {
+        helperPath,
+        allowAnyDevice ? "--any" : "--safe",
+        imagePath.fileSystemRepresentation,
+        NULL,
+    };
+
+    pid_t pid = 0;
+    int spawnResult = posix_spawn(&pid, helperPath, &actions, NULL, (char *const *)argv, environ);
+    posix_spawn_file_actions_destroy(&actions);
+    close(outPipe[1]);
+
+    if (spawnResult != 0) {
+        OCRLog(@"helper spawn failed: %d", spawnResult);
+        close(outPipe[0]);
+        if (error) *error = OCRError(12, @"无法启动识别组件");
+        return nil;
+    }
+
+    NSMutableData *output = [NSMutableData data];
+    CFAbsoluteTime deadline = CFAbsoluteTimeGetCurrent() + OCRRecognizeTimeout();
+    BOOL timedOut = NO;
+
+    for (;;) {
+        int remaining = (int)((deadline - CFAbsoluteTimeGetCurrent()) * 1000);
+        if (remaining <= 0) { timedOut = YES; break; }
+
+        struct pollfd descriptor = { outPipe[0], POLLIN, 0 };
+        int ready = poll(&descriptor, 1, remaining);
+        if (ready < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        if (ready == 0) { timedOut = YES; break; }
+
+        char buffer[4096];
+        ssize_t count = read(outPipe[0], buffer, sizeof(buffer));
+        if (count > 0) [output appendBytes:buffer length:(NSUInteger)count];
+        else if (count == 0) break;              // EOF：helper 退出了
+        else if (errno != EINTR) break;
+    }
+    close(outPipe[0]);
+
+    if (timedOut) kill(pid, SIGKILL);
+
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+
+    if (timedOut) {
+        if (error) *error = OCRError(13, @"识别超时");
+        return nil;
+    }
+    if (WIFSIGNALED(status)) {
+        OCRLog(@"helper crashed: signal %d", WTERMSIG(status));
+        if (error) *error = OCRError(14, [NSString stringWithFormat:@"识别组件异常退出（信号 %d）", WTERMSIG(status)]);
+        return nil;
+    }
+
+    NSString *text = [[NSString alloc] initWithData:output encoding:NSUTF8StringEncoding] ?: @"";
+
+    if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+        OCRLog(@"helper failed: code=%d output=%@", WEXITSTATUS(status),
+              text.length > 800 ? [text substringToIndex:800] : text);
+        NSString *detail = text.length > 0 ? [NSString stringWithFormat:@"\n%@", text] : @"";
+        if (error) *error = OCRError(15, [NSString stringWithFormat:@"识别失败（代码 %d）%@",
+                                          WEXITSTATUS(status), detail]);
+        return nil;
+    }
+
+    return text;
+}
 
 @implementation OCREngine
 
@@ -100,59 +152,59 @@ static void OCRDeliver(NSString *text, NSError *error, OCRTextCompletion complet
              languages:(NSArray<NSString *> *)languages
               fastMode:(BOOL)fastMode
             completion:(OCRTextCompletion)completion {
+    (void)languages;
+    (void)fastMode;
+
     if (!image.CGImage) {
-        NSError *error = [NSError errorWithDomain:@"ScreenOCR"
-                                             code:-1
-                                         userInfo:@{NSLocalizedDescriptionKey: @"图像无效"}];
-        OCRDeliver(nil, error, completion);
+        NSError *error = OCRError(-1, @"图像无效");
+        if (completion) {
+            dispatch_async(dispatch_get_main_queue(), ^{ completion(nil, error); });
+        }
         return;
     }
 
     NSDate *startTime = [NSDate date];
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        __block BOOL finished = NO;
+        // SpringBoard 的 NSTemporaryDirectory 不可靠，用 mobile 一定可写的公共目录
+        NSString *directory = @"/var/mobile/Library/Caches/ScreenOCR";
+        [[NSFileManager defaultManager] createDirectoryAtPath:directory
+                                  withIntermediateDirectories:YES
+                                                   attributes:nil
+                                                        error:nil];
+        NSString *path = [directory stringByAppendingPathComponent:
+                          [NSString stringWithFormat:@"%@.png", [NSUUID UUID].UUIDString]];
 
-        VNRecognizeTextRequest *request =
-            [[VNRecognizeTextRequest alloc] initWithCompletionHandler:^(VNRequest *req, NSError *error) {
-                if (finished) return;
-                finished = YES;
-
-                if (error) {
-                    OCRLog(@"recognize error: %@", error);
-                    OCRDeliver(nil, error, completion);
-                    return;
-                }
-                NSString *text = OCRTextFromResults(req.results);
-                OCRLog(@"recognize done, %lu chars, %.0f ms",
-                       (unsigned long)text.length,
-                       [[NSDate date] timeIntervalSinceDate:startTime] * 1000.0);
-                OCRDeliver(text, nil, completion);
-            }];
-
-        request.recognitionLevel = fastMode ? VNRequestTextRecognitionLevelFast
-                                            : VNRequestTextRecognitionLevelAccurate;
-        request.usesLanguageCorrection = YES;
-
-        if (@available(iOS 16.0, *)) {
-            // 16 以上交给系统自动判断语种，中英混排更稳
-            request.automaticallyDetectsLanguage = YES;
-        } else {
-            request.recognitionLanguages = OCRFilterLanguages(languages);
-        }
-
+        NSData *png = UIImagePNGRepresentation(image);
         NSError *error = nil;
-        VNImageRequestHandler *handler =
-            [[VNImageRequestHandler alloc] initWithCGImage:image.CGImage
-                                               orientation:OCRCGImageOrientation(image.imageOrientation)
-                                                   options:@{}];
-        [handler performRequests:@[request] error:&error];
+        NSString *text = nil;
 
-        if (error && !finished) {
-            finished = YES;
-            OCRLog(@"performRequests error: %@", error);
-            OCRDeliver(nil, error, completion);
+        if (!png || ![png writeToFile:path options:NSDataWritingAtomic error:&error]) {
+            error = error ?: OCRError(2, @"无法保存截图");
+            OCRLog(@"save png failed: %@", error.localizedDescription);
+        } else {
+            OCRLog(@"recognize: image=%@ png=%luB", NSStringFromCGSize(image.size), (unsigned long)png.length);
+            // 先只用 CPU；不行再放开默认计算设备（崩也只崩 helper）
+            for (NSInteger attempt = 0; attempt < 2 && text == nil; attempt++) {
+                error = nil;
+                text = OCRRunHelper(path, attempt > 0, &error);
+            }
+            [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
         }
+
+        double elapsed = [[NSDate date] timeIntervalSinceDate:startTime] * 1000.0;
+        OCRLog(@"recognize done: %ld chars, %.0f ms", (long)text.length, elapsed);
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (!completion) return;
+            if (text == nil) {
+                completion(nil, error ?: OCRError(3, @"识别失败"));
+            } else if (text.length == 0) {
+                completion(nil, OCRError(4, @"没有识别到文字"));
+            } else {
+                completion(text, nil);
+            }
+        });
     });
 }
 

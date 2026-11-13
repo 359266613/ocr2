@@ -331,8 +331,10 @@ static __weak UIWindow *gPreviousKeyWindow = nil;
         [strongSelf.spinner stopAnimating];
 
         if (error) {
-            strongSelf.statusLabel.text = [NSString stringWithFormat:@"识别失败：%@",
-                                           error.localizedDescription ?: @"未知错误"];
+            OCRLog(@"ocr failed: %@", error.localizedDescription);
+            strongSelf.statusLabel.text = @"识别失败";
+            // 失败原因也放进文本框，方便长按复制出来排查
+            strongSelf.textView.text = error.localizedDescription ?: @"未知错误";
             return;
         }
 
@@ -480,23 +482,35 @@ static __weak UIWindow *gPreviousKeyWindow = nil;
 
 #pragma mark - 入口
 
-+ (void)captureAndPresentFromWindow:(UIWindow *)window {
++ (void)captureAndPresentFromWindow:(UIWindow * _Nullable)window {
     UIImage *image = OCRCaptureScreen();
+    OCRLog(@"capture: %@ size=%@", image ? @"ok" : @"FAILED",
+           image ? NSStringFromCGSize(image.size) : @"-");
+
     if (!image) {
-        OCRLog(@"screen capture failed");
         UIAlertController *alert =
             [UIAlertController alertControllerWithTitle:@"ScreenOCR"
                                                 message:@"截屏失败，当前界面可能受系统保护"
                                          preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleCancel handler:nil]];
-        UIViewController *presenter = window.rootViewController;
+        UIViewController *presenter = (window ?: OCRKeyWindow()).rootViewController;
         if (presenter) [presenter presentViewController:alert animated:YES completion:nil];
         return;
     }
     [self presentWithImage:image hostWindow:window];
 }
 
-+ (instancetype)presentWithImage:(UIImage *)image hostWindow:(UIWindow *)window {
++ (void)dismissCurrentOverlay {
+    if (!gOCRWindow) return;
+    UIViewController *root = gOCRWindow.rootViewController;
+    gOCRWindow.hidden = YES;
+    gOCRWindow = nil;
+    if ([root isKindOfClass:[OCRResultViewController class]]) {
+        [(OCRResultViewController *)root view].alpha = 1.0;
+    }
+}
+
++ (instancetype)presentWithImage:(UIImage *)image hostWindow:(UIWindow * _Nullable)window {
     if (gOCRWindow) return nil;
     if (!image) return nil;
 
@@ -506,7 +520,18 @@ static __weak UIWindow *gPreviousKeyWindow = nil;
 
     UIWindow *overlay = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
     if (@available(iOS 13.0, *)) {
-        overlay.windowScene = window.windowScene ?: OCRKeyWindow().windowScene;
+        UIWindowScene *scene = window.windowScene ?: OCRKeyWindow().windowScene;
+        if (!scene) {
+            // SpringBoard 里窗口场景不一定跟着 key window 走，自己找活跃场景
+            for (UIScene *candidate in UIApplication.sharedApplication.connectedScenes) {
+                if (![candidate isKindOfClass:[UIWindowScene class]]) continue;
+                UIWindowScene *windowScene = (UIWindowScene *)candidate;
+                if (windowScene.activationState != UISceneActivationStateForegroundActive) continue;
+                scene = windowScene;
+                break;
+            }
+        }
+        overlay.windowScene = scene;
     }
     overlay.windowLevel = UIWindowLevelAlert + 20;
     overlay.backgroundColor = UIColor.clearColor;
@@ -514,6 +539,7 @@ static __weak UIWindow *gPreviousKeyWindow = nil;
     gOCRWindow = overlay;
 
     [overlay makeKeyAndVisible];
+    OCRLog(@"overlay presented: scene=%@", overlay.windowScene ? @"yes" : @"nil");
     return controller;
 }
 
