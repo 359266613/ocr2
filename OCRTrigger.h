@@ -11,6 +11,11 @@
 
 #import <Foundation/Foundation.h>
 
+// Tweak.xm 是 Objective-C++ 编译的，不加 extern "C" 链接时找不到符号
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /// URL 是否是本插件的触发链接
 BOOL OCRURLMatchesTrigger(NSURL *url);
 
@@ -22,3 +27,7 @@ void OCRDismissOverlay(void);
 
 /// 截图 + 识别 + 弹浮层。必须在主线程调用。
 void OCRRunRecognition(void);
+
+#ifdef __cplusplus
+}
+#endif
