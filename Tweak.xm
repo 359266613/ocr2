@@ -75,11 +75,9 @@
             // 关键自检：trigger 到底挂在哪、能不能截到屏，一次写清楚
             Class springBoardClass = NSClassFromString(@"SpringBoard");
             OCRLog(@"springboard ready, trigger = prefs:root=%@", OCRTriggerToken());
-            OCRLog(@"self-check: SpringBoard=%@ applicationOpenURL:=%d UIApplication=%@ UIWindow=%@",
-                   springBoardClass ?: @"nil",
-                   springBoardClass && class_getInstanceMethod(springBoardClass, @selector(applicationOpenURL:)) ? 1 : 0,
-                   [UIApplication class],
-                   [UIWindow class]);
+            OCRLog(@"self-check: SpringBoard=%@ applicationOpenURL:=%d",
+                   NSStringFromClass(springBoardClass) ?: @"(nil)",
+                   springBoardClass && class_getInstanceMethod(springBoardClass, @selector(applicationOpenURL:)) ? 1 : 0);
             OCRLog(@"self-check: _UICreateScreenUIImage=%d UIGetScreenImage=%d",
                    dlsym(RTLD_DEFAULT, "_UICreateScreenUIImage") != NULL,
                    dlsym(RTLD_DEFAULT, "UIGetScreenImage") != NULL);
