@@ -91,13 +91,15 @@ prefs:root=axsocr_recognize
 |---|---|
 | `loaded: com.apple.springboard` | 插件已注入 SpringBoard |
 | `springboard ready, trigger = prefs:root=axsocr_recognize` | 触发通道就绪 |
+| `self-check: SpringBoard=... applicationOpenURL:=1` | 说明私有方法确实存在，hook 能生效（`=0` 说明这个系统版本改了方法名） |
+| `self-check: _UICreateScreenUIImage=1` | 私有截图 API 可用（`=0` 时会走回退，SB 里可能是空图） |
 | `trigger: url=prefs:root=axsocr_recognize` | 收到了深链接 ✅ |
 | `trigger: ignored, too soon` | 0.6s 内重复触发，被去重 |
 | `capture: ok size={1170, 2532}` | 抓图成功 |
 | `recognize done: 123 chars, 480 ms` | 识别完成 |
 | `helper missing` | deb 没装全，`/var/jb/usr/libexec/ScreenOCRHelper` 不存在 |
 | `helper crashed: signal ...` | Vision 崩了，日志里会带具体配置 |
-| `gesture attached: ...` | 双指长按挂上了（只对 App 进程） |
+| `gesture attached: ...` | 双指长按挂上了（只对 App 进程，受沙盒限制可能写不进日志） |
 
 **日志里没有任何 `loaded:`** → 插件根本没被加载：确认 deb 架构（`iphoneos-arm64`）、确认注入框架是 ElleKit / MobileSubstrate 且已启用。
 
