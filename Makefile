@@ -22,5 +22,6 @@ include $(THEOS_MAKE_PATH)/tweak.mk
 SUBPROJECTS += AxsScreenOcrPrefs AxsScreenOcrWorker
 include $(THEOS_MAKE_PATH)/aggregate.mk
 
-after-stage::
-	chmod 0755 $(THEOS_STAGING_DIR)/DEBIAN/postinst $(THEOS_STAGING_DIR)/DEBIAN/prerm
+# Theos copies maintainer scripts while preparing the package control directory.
+before-package:: $(THEOS_STAGING_DIR)/DEBIAN/control
+	chmod 0755 "$(THEOS_STAGING_DIR)/DEBIAN/postinst" "$(THEOS_STAGING_DIR)/DEBIAN/prerm"
