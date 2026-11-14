@@ -1,6 +1,25 @@
 #import "AxsScreenOcrCapture.h"
 #import "AxsScreenOcrLog.h"
-#import "AxsScreenOcrPrivate.h"
+
+#import <dlfcn.h>
+
+// UIKit 私有截图接口不在公开 SDK 里，用 dlsym 在运行时取，
+// 系统移除符号时自动走兜底，既不会链接失败也不会加载崩溃。
+typedef UIImage *(*AxsScreenOcrCreateImageFunction)(void);
+typedef CGImageRef (*AxsScreenOcrGetImageFunction)(void);
+
+static AxsScreenOcrCreateImageFunction axsScreenOcrCreateImage = NULL;
+static AxsScreenOcrGetImageFunction axsScreenOcrGetImage = NULL;
+static dispatch_once_t axsScreenOcrSymbolOnce;
+
+static void axs_screenocr_resolve_capture_symbols(void) {
+    dispatch_once(&axsScreenOcrSymbolOnce, ^{
+        axsScreenOcrCreateImage =
+            (AxsScreenOcrCreateImageFunction)dlsym(RTLD_DEFAULT, "_UICreateScreenUIImage");
+        axsScreenOcrGetImage =
+            (AxsScreenOcrGetImageFunction)dlsym(RTLD_DEFAULT, "UIGetScreenImage");
+    });
+}
 
 UIWindowScene *axs_screenocr_active_window_scene(void) {
     UIApplication *application = [UIApplication sharedApplication];
@@ -30,13 +49,16 @@ UIWindow *axs_screenocr_key_window(void) {
 }
 
 BOOL axs_screenocr_capture_available(void) {
-    return _UICreateScreenUIImage != NULL || UIGetScreenImage != NULL;
+    axs_screenocr_resolve_capture_symbols();
+    return axsScreenOcrCreateImage != NULL || axsScreenOcrGetImage != NULL;
 }
 
 UIImage *axs_screenocr_capture_screen(void) {
-    if (_UICreateScreenUIImage) {
+    axs_screenocr_resolve_capture_symbols();
+
+    if (axsScreenOcrCreateImage) {
         @try {
-            UIImage *image = _UICreateScreenUIImage();
+            UIImage *image = axsScreenOcrCreateImage();
             if (image.CGImage) {
                 axs_screenocr_log(@"capture: _UICreateScreenUIImage size=%@",
                                   NSStringFromCGSize(image.size));
@@ -47,9 +69,9 @@ UIImage *axs_screenocr_capture_screen(void) {
         }
     }
 
-    if (UIGetScreenImage) {
+    if (axsScreenOcrGetImage) {
         @try {
-            CGImageRef imageRef = UIGetScreenImage();
+            CGImageRef imageRef = axsScreenOcrGetImage();
             if (imageRef) {
                 UIImage *image = [UIImage imageWithCGImage:imageRef];
                 CGImageRelease(imageRef);
