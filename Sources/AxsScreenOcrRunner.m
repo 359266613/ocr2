@@ -22,13 +22,12 @@ static CGImagePropertyOrientation axs_screenocr_orientation(UIImageOrientation o
     }
 }
 
-// 只有走兜底路径才需要落盘，进程内识别直接用内存里的 CGImage。
 static NSString *axs_screenocr_write_temp_png(UIImage *image) {
     NSString *directory = axs_screenocr_workDirectoryPath();
     [[NSFileManager defaultManager] createDirectoryAtPath:directory
                               withIntermediateDirectories:YES attributes:nil error:NULL];
     NSString *imagePath = [directory stringByAppendingPathComponent:
-        [NSString stringWithFormat:@"shot-%.0f.png", [[NSDate date] timeIntervalSince1970] * 1000]];
+        [NSString stringWithFormat:@"shot-%@.png", NSUUID.UUID.UUIDString]];
 
     NSData *png = UIImagePNGRepresentation(image);
     if (!png || ![png writeToFile:imagePath atomically:YES]) return nil;
@@ -70,34 +69,27 @@ static NSString *axs_screenocr_write_temp_png(UIImage *image) {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSError *error = nil;
 
-        // 主路径：在本进程直接识别。Vision 的 OCR 模型由 Espresso 加载，
-        // 需要 ANE / GPU 后端权限，而这份权限只授予 App 与系统进程；
-        // 独立 helper 即使签了 platform-application 也拿不到。
-        NSArray<AxsScreenOcrLine *> *lines =
-            axs_screenocr_recognize_cgimage(image.CGImage, orientation, &error);
-        axs_screenocr_log(@"in-process pass: %lu lines, error=%@",
-                          (unsigned long)lines.count,
-                          error.localizedDescription ?: @"none");
-
-        // 兜底：进程内失败才落盘交给独立进程，省掉一次多余的 PNG 编码。
-        if (lines.count == 0) {
-            NSString *imagePath = axs_screenocr_write_temp_png(image);
-            if (imagePath) {
-                NSError *fallbackError = nil;
-                NSArray<AxsScreenOcrLine *> *fallback =
-                    axs_screenocr_recognize_image_at_path(imagePath, &fallbackError);
-                [[NSFileManager defaultManager] removeItemAtPath:imagePath error:NULL];
-                if (fallback.count > 0) {
-                    lines = fallback;
-                    error = nil;
-                } else if (fallbackError && !error) {
-                    error = fallbackError;
+        NSArray<AxsScreenOcrLine *> *lines = nil;
+        NSString *imagePath = axs_screenocr_write_temp_png(image);
+        if (imagePath) {
+            @try {
+                lines = axs_screenocr_recognize_image_at_path(imagePath, orientation, &error);
+            } @catch (NSException *exception) {
+                axs_screenocr_log(@"helper invocation exception: %@", exception.reason ?: @"unknown");
+                error = [NSError errorWithDomain:@"com.axs.screenocr" code:34
+                    userInfo:@{NSLocalizedDescriptionKey: @"识别组件调用失败"}];
+            } @finally {
+                NSError *removeError = nil;
+                if (![[NSFileManager defaultManager] removeItemAtPath:imagePath error:&removeError]) {
+                    axs_screenocr_log(@"temporary screenshot cleanup failed: %@", removeError.localizedDescription);
                 }
-                axs_screenocr_log(@"helper fallback: %lu lines, error=%@",
-                                  (unsigned long)fallback.count,
-                                  fallbackError.localizedDescription ?: @"none");
             }
+        } else {
+            error = [NSError errorWithDomain:@"com.axs.screenocr" code:33
+                userInfo:@{NSLocalizedDescriptionKey: @"无法创建临时截图，请检查存储空间和权限"}];
         }
+        axs_screenocr_log(@"helper pass: %lu lines, error=%@",
+                          (unsigned long)lines.count, error.localizedDescription ?: @"none");
 
         NSMutableString *text = [NSMutableString string];
         for (AxsScreenOcrLine *line in lines) {

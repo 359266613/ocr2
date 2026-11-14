@@ -4,10 +4,11 @@
 #import <Vision/Vision.h>
 #import <math.h>
 #import <stdio.h>
+#import <stdlib.h>
 #import <unistd.h>
 
 // 独立识别进程：由 SpringBoard 内的 dylib 以 posix_spawn 启动。
-// 参数 argv[1] 是待识别 PNG 路径，结果以单行 JSON 写到 stdout。
+// 参数为 PNG 路径和图片方向，结果以单行 JSON 写到 stdout。
 
 static NSString * const AxsScreenOcrHelperLogDirectory = @"/var/mobile/Library/Logs";
 static NSString * const AxsScreenOcrHelperLogFile = @"/var/mobile/Library/Logs/AxsScreenOcrHelper.log";
@@ -60,8 +61,7 @@ static int axs_screenocr_helper_fail(NSString *message, int code) {
     return code;
 }
 
-// 统一构造识别请求。越狱 helper 没有 ANE entitlement，Espresso 走 GPU/ANE 后端时
-// 会报 "Error loading network -5, -1"，强制 CPU 后端后可以稳定出结果。
+// 使用 CPU 请求；是否能成功加载模型由运行环境决定。
 static VNRecognizeTextRequest *axs_screenocr_helper_request(void) {
     VNRecognizeTextRequest *request = [[VNRecognizeTextRequest alloc] init];
     if (@available(iOS 16.0, *)) {
@@ -117,6 +117,7 @@ static CGImageRef axs_screenocr_helper_scaled_copy(CGImageRef image, CGFloat fac
 // 跑一轮识别。返回 YES 表示请求本身跑通了（lines 可能为空，即画面无文字）；
 // 返回 NO 表示框架层失败（例如申请不到像素缓冲），原因写进 outError。
 static BOOL axs_screenocr_helper_perform(CGImageRef image,
+                                         CGImagePropertyOrientation orientation,
                                          NSMutableArray<NSDictionary *> *lines,
                                          NSError **outError) {
     NSError *error = nil;
@@ -125,7 +126,7 @@ static BOOL axs_screenocr_helper_perform(CGImageRef image,
 
     @try {
         VNImageRequestHandler *handler =
-            [[VNImageRequestHandler alloc] initWithCGImage:image options:@{}];
+            [[VNImageRequestHandler alloc] initWithCGImage:image orientation:orientation options:@{}];
         request = axs_screenocr_helper_request();
         succeeded = [handler performRequests:@[ request ] error:&error];
     } @catch (NSException *exception) {
@@ -160,7 +161,7 @@ static BOOL axs_screenocr_helper_perform(CGImageRef image,
 }
 
 // 诊断用：拿一张 128x128 的纯白图跑一次最小识别。
-// 小图能过说明 Vision 后端可用、问题只在缓冲尺寸；小图也过不去就是权限层面的事。
+// 小图也失败表明不能仅通过缩小截图解决，具体原因仍需进一步诊断。
 static void axs_screenocr_helper_selftest(void) {
     CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
     if (!space) return;
@@ -179,9 +180,9 @@ static void axs_screenocr_helper_selftest(void) {
 
     NSMutableArray<NSDictionary *> *lines = [NSMutableArray array];
     NSError *error = nil;
-    BOOL performed = axs_screenocr_helper_perform(probe, lines, &error);
+    BOOL performed = axs_screenocr_helper_perform(probe, kCGImagePropertyOrientationUp, lines, &error);
     axs_screenocr_helper_note(@"selftest 128x128 -> %@", performed
-                              ? @"vision usable (buffer size is the problem)"
+                              ? @"small image request succeeded"
                               : axs_screenocr_helper_describe(error));
     CGImageRelease(probe);
 }
@@ -202,6 +203,13 @@ int main(int argc, char *argv[]) {
 
         NSString *path = [NSString stringWithUTF8String:argv[1]];
         if (path.length == 0) return axs_screenocr_helper_fail(@"invalid image path", 2);
+        char *end = NULL;
+        long orientationValue = argc >= 3 ? strtol(argv[2], &end, 10) : 1;
+        if (argc >= 3 && (!end || *end != '\0' || orientationValue < 1 || orientationValue > 8)) {
+            return axs_screenocr_helper_fail(@"invalid image orientation", 2);
+        }
+        CGImagePropertyOrientation orientation = (CGImagePropertyOrientation)orientationValue;
+        axs_screenocr_helper_note(@"orientation=%ld", orientationValue);
 
         NSURL *url = [NSURL fileURLWithPath:path];
         CGImageSourceRef source = CGImageSourceCreateWithURL((__bridge CFURLRef)url, NULL);
@@ -231,7 +239,7 @@ int main(int argc, char *argv[]) {
 
             NSError *error = nil;
             [lines removeAllObjects];
-            BOOL performed = axs_screenocr_helper_perform(scaled, lines, &error);
+            BOOL performed = axs_screenocr_helper_perform(scaled, orientation, lines, &error);
 
             axs_screenocr_helper_note(@"attempt %.3f at %zux%zu -> %@ (lines=%lu)", factor,
                                       CGImageGetWidth(scaled), CGImageGetHeight(scaled),

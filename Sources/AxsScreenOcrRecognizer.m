@@ -2,9 +2,7 @@
 #import "AxsScreenOcrLog.h"
 #import "AxsScreenOcrPaths.h"
 
-#import <Vision/Vision.h>
 #import <errno.h>
-#import <math.h>
 #import <signal.h>
 #import <spawn.h>
 #import <sys/select.h>
@@ -26,146 +24,11 @@ static NSError *axs_screenocr_error(NSInteger code, NSString *message) {
                            userInfo:@{NSLocalizedDescriptionKey: message}];
 }
 
-static VNRecognizeTextRequest *axs_screenocr_make_request(NSUInteger revision, BOOL cpuOnly) {
-    VNRecognizeTextRequest *request = [[VNRecognizeTextRequest alloc] init];
-    request.revision = revision;
-    request.recognitionLevel = VNRequestTextRecognitionLevelAccurate;
-    request.usesLanguageCorrection = YES;
-    request.recognitionLanguages = @[ @"zh-Hans", @"en-US" ];
-    if (@available(iOS 16.0, *)) {
-        request.automaticallyDetectsLanguage = NO;
-    }
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    request.usesCPUOnly = cpuOnly;
-#pragma clang diagnostic pop
-    return request;
-}
-
-static void axs_screenocr_log_request(VNRecognizeTextRequest *request, NSString *name) {
-    NSError *error = nil;
-    NSArray *languages;
-    if (@available(iOS 15.0, *)) {
-        languages = [request supportedRecognitionLanguagesAndReturnError:&error];
-    } else {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-        languages = [VNRecognizeTextRequest supportedRecognitionLanguagesForTextRecognitionLevel:request.recognitionLevel
-                                                                                      revision:request.revision error:&error];
-#pragma clang diagnostic pop
-    }
-    axs_screenocr_log(@"vision %@ revision=%lu level=accurate configured=%@ supported=%@ error=%@",
-                      name, (unsigned long)request.revision,
-                      [request.recognitionLanguages componentsJoinedByString:@","],
-                      [languages componentsJoinedByString:@","] ?: @"unknown",
-                      error.localizedDescription ?: @"none");
-}
-
-static void axs_screenocr_log_results(VNRecognizeTextRequest *request, NSString *name) {
-    NSUInteger characters = 0, chinese = 0, invalid = 0, count = 0;
-    double confidence = 0;
-    for (VNRecognizedTextObservation *observation in request.results) {
-        VNRecognizedText *candidate = [[observation topCandidates:1] firstObject];
-        if (!candidate.string.length) continue;
-        count++;
-        confidence += candidate.confidence;
-        characters += candidate.string.length;
-        for (NSUInteger i = 0; i < candidate.string.length; i++) {
-            unichar c = [candidate.string characterAtIndex:i];
-            if ((c >= 0x3400 && c <= 0x9fff) || (c >= 0xf900 && c <= 0xfaff)) chinese++;
-            if (c == 0xffff || c == 0xfffe || c == 0xfffd) invalid++;
-        }
-    }
-    axs_screenocr_log(@"vision %@ result lines=%lu chars=%lu chinese=%lu invalid=%lu confidence=%.3f",
-                      name, (unsigned long)count, (unsigned long)characters,
-                      (unsigned long)chinese, (unsigned long)invalid,
-                      count ? confidence / count : 0.0);
-}
-
-static NSArray<AxsScreenOcrLine *> *axs_screenocr_lines_from_request(VNRecognizeTextRequest *request) {
-    NSMutableArray<AxsScreenOcrLine *> *lines = [NSMutableArray array];
-    for (VNRecognizedTextObservation *observation in request.results) {
-        VNRecognizedText *candidate = [[observation topCandidates:1] firstObject];
-        if (candidate.string.length == 0) continue;
-        AxsScreenOcrLine *line = [[AxsScreenOcrLine alloc] init];
-        line.text = candidate.string;
-        line.box = observation.boundingBox;
-        [lines addObject:line];
-    }
-    // Vision 返回顺序不保证阅读顺序，按行（y 降序）再按列（x 升序）重排。
-    [lines sortUsingComparator:^NSComparisonResult(AxsScreenOcrLine *left, AxsScreenOcrLine *right) {
-        if (fabs(left.box.origin.y - right.box.origin.y) > 0.01) {
-            return left.box.origin.y > right.box.origin.y ? NSOrderedAscending : NSOrderedDescending;
-        }
-        if (left.box.origin.x == right.box.origin.x) return NSOrderedSame;
-        return left.box.origin.x < right.box.origin.x ? NSOrderedAscending : NSOrderedDescending;
-    }];
-    return lines;
-}
-
-NSArray<AxsScreenOcrLine *> *axs_screenocr_recognize_cgimage(CGImageRef image,
-                                                             CGImagePropertyOrientation orientation,
-                                                             NSError **error) {
-    if (!image) {
-        if (error) *error = axs_screenocr_error(30, @"截图数据无效");
-        return nil;
-    }
-
-    NSError *lastError = nil;
-    NSArray<AxsScreenOcrLine *> *emptyResult = nil;
-    NSUInteger revisions[] = { VNRecognizeTextRequestRevision2, 0 };
-    NSUInteger count = 1;
-    if (@available(iOS 16.0, *)) {
-        revisions[1] = VNRecognizeTextRequestRevision3;
-        count = 2;
-    }
-    for (NSUInteger i = 0; i < count; i++) {
-        for (NSUInteger backend = 0; backend < 2; backend++) {
-            BOOL cpuOnly = backend == 1;
-            NSString *name = [NSString stringWithFormat:@"r%lu-%@", (unsigned long)revisions[i],
-                              cpuOnly ? @"cpu" : @"default"];
-            @autoreleasepool {
-                @try {
-                    VNRecognizeTextRequest *request = axs_screenocr_make_request(revisions[i], cpuOnly);
-                    axs_screenocr_log_request(request, name);
-                    VNImageRequestHandler *handler =
-                        [[VNImageRequestHandler alloc] initWithCGImage:image orientation:orientation options:@{}];
-                    NSError *requestError = nil;
-                    if ([handler performRequests:@[ request ] error:&requestError]) {
-                        axs_screenocr_log_results(request, name);
-                        NSArray<AxsScreenOcrLine *> *lines = axs_screenocr_lines_from_request(request);
-                        if (lines.count) {
-                            axs_screenocr_log(@"vision selected=%@", name);
-                            return lines;
-                        }
-                        emptyResult = lines;
-                        axs_screenocr_log(@"vision %@ returned no text", name);
-                    } else {
-                        lastError = requestError ?: axs_screenocr_error(32, @"Vision 未返回错误详情");
-                        NSError *underlying = lastError.userInfo[NSUnderlyingErrorKey];
-                        axs_screenocr_log(@"vision %@ failed: domain=%@ code=%ld message=%@ underlying=%@",
-                                          name, lastError.domain, (long)lastError.code,
-                                          lastError.localizedDescription, underlying ?: @"none");
-                    }
-                } @catch (NSException *exception) {
-                    lastError = axs_screenocr_error(31, exception.reason ?: @"识别异常");
-                    axs_screenocr_log(@"vision %@ threw: %@", name, exception.reason ?: @"unknown");
-                }
-            }
-        }
-    }
-    if (emptyResult) return emptyResult;
-    if (error) *error = lastError ?: axs_screenocr_error(32, @"识别失败");
-    return nil;
-}
-
-
-NSString *axs_screenocr_helper_path(void) {
+static NSString *axs_screenocr_helper_path(void) {
     return axs_screenocr_resourcePath(@"/usr/libexec/AxsScreenOcrHelper");
 }
 
-static BOOL axs_screenocr_read_pipe(int fd, NSMutableData *output, int timeoutSeconds) {
-    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:timeoutSeconds];
+static BOOL axs_screenocr_read_pipe(int fd, NSMutableData *output, NSDate *deadline) {
     char buffer[4096];
     while (YES) {
         NSTimeInterval remaining = [deadline timeIntervalSinceNow];
@@ -187,6 +50,7 @@ static BOOL axs_screenocr_read_pipe(int fd, NSMutableData *output, int timeoutSe
 
         ssize_t count = read(fd, buffer, sizeof(buffer));
         if (count > 0) {
+            if (output.length + (NSUInteger)count > 4 * 1024 * 1024) return NO;
             [output appendBytes:buffer length:(NSUInteger)count];
             continue;
         }
@@ -224,6 +88,7 @@ static id axs_screenocr_decode_payload(NSData *output) {
 }
 
 NSArray<AxsScreenOcrLine *> *axs_screenocr_recognize_image_at_path(NSString *imagePath,
+                                                                   CGImagePropertyOrientation orientation,
                                                                    NSError **error) {
     NSString *helper = axs_screenocr_helper_path();
     if (helper.length == 0 || ![[NSFileManager defaultManager] isExecutableFileAtPath:helper]) {
@@ -244,10 +109,13 @@ NSArray<AxsScreenOcrLine *> *axs_screenocr_recognize_image_at_path(NSString *ima
     // 否则框架日志会混进 JSON，把正常结果判定成「格式不正确」。
     posix_spawn_file_actions_adddup2(&actions, pipeFDs[1], STDOUT_FILENO);
     posix_spawn_file_actions_addclose(&actions, pipeFDs[0]);
+    posix_spawn_file_actions_addclose(&actions, pipeFDs[1]);
 
+    NSString *orientationArgument = [NSString stringWithFormat:@"%u", (unsigned int)orientation];
     char *arguments[] = {
         (char *)helper.fileSystemRepresentation,
         (char *)imagePath.fileSystemRepresentation,
+        (char *)orientationArgument.UTF8String,
         NULL
     };
 
@@ -265,21 +133,43 @@ NSArray<AxsScreenOcrLine *> *axs_screenocr_recognize_image_at_path(NSString *ima
     }
 
     NSMutableData *output = [NSMutableData data];
-    BOOL finished = axs_screenocr_read_pipe(pipeFDs[0], output, AxsScreenOcrRecognizeTimeout);
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:AxsScreenOcrRecognizeTimeout];
+    BOOL finished = axs_screenocr_read_pipe(pipeFDs[0], output, deadline);
     close(pipeFDs[0]);
 
+    int status = 0;
+    pid_t waited = 0;
+    while (finished && [deadline timeIntervalSinceNow] > 0) {
+        waited = waitpid(pid, &status, WNOHANG);
+        if (waited == pid) break;
+        if (waited < 0) {
+            if (errno != EINTR) break;
+            waited = 0;
+        }
+        usleep(20000);
+    }
+    if (finished && waited == 0) finished = NO;
     if (!finished) {
         kill(pid, SIGKILL);
-        axs_screenocr_log(@"helper timeout, killed pid=%d", pid);
+        axs_screenocr_log(@"helper timed out or output exceeded limit, killed pid=%d", pid);
+        while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+        if (error) *error = axs_screenocr_error(13, @"识别组件超时或输出过大");
+        return nil;
     }
-
-    int status = 0;
-    waitpid(pid, &status, 0);
+    if (waited < 0) {
+        axs_screenocr_log(@"helper wait failed: %d", errno);
+        if (error) *error = axs_screenocr_error(16, @"无法获取识别组件状态");
+        return nil;
+    }
+    if (WIFSIGNALED(status)) {
+        axs_screenocr_log(@"helper terminated by signal %d", WTERMSIG(status));
+        if (error) *error = axs_screenocr_error(17, @"识别组件异常退出，请查看辅助日志或崩溃报告");
+        return nil;
+    }
 
     if (output.length == 0) {
         if (error) {
-            *error = axs_screenocr_error(13, finished ? @"识别进程没有返回结果"
-                                                      : @"识别超时，请重试");
+            *error = axs_screenocr_error(13, @"识别进程没有返回结果");
         }
         axs_screenocr_log(@"helper returned no data, status=%d", status);
         return nil;
@@ -298,6 +188,11 @@ NSArray<AxsScreenOcrLine *> *axs_screenocr_recognize_image_at_path(NSString *ima
             ? payload[@"error"] : @"识别失败";
         if (error) *error = axs_screenocr_error(15, message);
         axs_screenocr_log(@"helper reported error: %@", message);
+        return nil;
+    }
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        axs_screenocr_log(@"helper exited unexpectedly: status=%d", status);
+        if (error) *error = axs_screenocr_error(18, @"识别组件退出状态异常");
         return nil;
     }
 

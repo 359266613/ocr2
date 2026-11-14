@@ -41,7 +41,7 @@ Headers/AxsScreenOcrPrivate.h          SpringBoard 与私有方法的必要声�
 Sources/AxsScreenOcrTrigger.*          URL 匹配与去重
 Sources/AxsScreenOcrRunner.*           抓图 -> 识别 -> 浮层 的编排
 Sources/AxsScreenOcrCapture.*          _UICreateScreenUIImage / UIGetScreenImage 与窗口兜底
-Sources/AxsScreenOcrRecognizer.*       进程内 Vision 识别及 helper 兜底
+Sources/AxsScreenOcrRecognizer.*       启动 helper、读取并校验结果
 Sources/AxsScreenOcrResultController.* 结果浮层（复制 / 全选 / 分享 / 关闭）
 Sources/AxsScreenOcrLog.*              落盘日志
 Sources/AxsScreenOcrConfig.*           配置快照（只读）
@@ -52,15 +52,13 @@ AxsScreenOcrPrefs/                     PreferenceBundle
 layout/                                PreferenceLoader 入口
 ```
 
-Vision 优先在 SpringBoard 内运行；无结果时才启动 helper 兜底。进程内识别的崩溃可能影响 SpringBoard，需要真机验证稳定性。
+Vision 只在独立 helper 内运行。helper 崩溃或超时会报告错误，不会由插件在 SpringBoard 内重试 Vision。
 
 ## 识别后端
 
-主路径使用 Accurate 模式，明确指定简体中文和英文，关闭自动语言检测。依次尝试 revision 2 的系统默认和 CPU 后端；iOS 16 及以上再尝试 revision 3 的两个后端，取得非空结果即停止。所有尝试均失败或无文字时才进入 helper。不同设备的后端可用性需要实机验证。
+helper 尝试降到 mobile 用户，使用 CPU 后端、Accurate 模式及简体中文和英文，按不同分辨率重试。此前该设备上的 helper 已出现模型和像素缓冲初始化失败，隔离不代表 OCR 已恢复；需要实机验证。结果管道只接收 stdout，helper 的 stderr 写入 `AxsScreenOcrHelper.log`。
 
-helper 仅在主路径无结果时运行，尝试降到 mobile 用户并使用 CPU 后端，按不同分辨率重试 Accurate。结果管道只接收 stdout，helper 的 stderr 写入 `AxsScreenOcrHelper.log`。
-
-日志包含截图像素尺寸、请求 revision、支持语言、各次识别行数、中文字符数、异常字符数和平均置信度，不保存识别正文或主路径截图。helper 兜底会临时写入截图，调用结束后删除。
+主日志记录截图尺寸和组件状态，不保存识别正文。截图临时写入缓存目录，正常完成、失败或超时后删除；如果 SpringBoard 本身意外退出，临时文件可能残留。
 
 ## 日志
 
@@ -78,8 +76,8 @@ helper 仅在主路径无结果时运行，尝试降到 mobile 用户并使用 C
 | `url seen via ...（未匹配触发词）` | URL 到了，但关键词不对 |
 | `capture: _UICreateScreenUIImage size=...` | 抓图成功 |
 | `capture pixels=...` | 截图像素尺寸、缩放与方向 |
-| `vision r2-default` / `vision r2-cpu` | 各 revision 和后端的请求配置、结果或错误 |
-| `vision selected=...` | 最终使用的识别路径 |
+| `helper pass` | 独立进程返回的行数或错误 |
+| `helper terminated by signal` | 独立识别进程因信号退出 |
 | `recognize finished: N lines, M chars` | 识别完成 |
 | `trigger ignored: plugin disabled` | 面板里没启用 |
 
