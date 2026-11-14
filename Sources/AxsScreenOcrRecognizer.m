@@ -59,6 +59,33 @@ static BOOL axs_screenocr_read_pipe(int fd, NSMutableData *output, int timeoutSe
     }
 }
 
+// helper 的 stdout 理论上只有一行 JSON，但系统框架偶尔仍会往 fd 1 写日志。
+// 先整体解析，失败再从尾部回溯，取最后一个能独立解析的对象。
+static id axs_screenocr_decode_payload(NSData *output) {
+    if (output.length == 0) return nil;
+
+    id decoded = [NSJSONSerialization JSONObjectWithData:output options:0 error:NULL];
+    if ([decoded isKindOfClass:[NSDictionary class]]) return decoded;
+
+    NSString *text = [[NSString alloc] initWithData:output encoding:NSUTF8StringEncoding];
+    if (text.length == 0) return nil;
+
+    NSRange search = NSMakeRange(0, text.length);
+    while (search.length > 0) {
+        NSRange brace = [text rangeOfString:@"{" options:NSBackwardsSearch range:search];
+        if (brace.location == NSNotFound) break;
+
+        NSString *candidate = [text substringFromIndex:brace.location];
+        id partial = [NSJSONSerialization JSONObjectWithData:
+                      [candidate dataUsingEncoding:NSUTF8StringEncoding] options:0 error:NULL];
+        if ([partial isKindOfClass:[NSDictionary class]]) return partial;
+
+        if (brace.location == 0) break;
+        search = NSMakeRange(0, brace.location);
+    }
+    return nil;
+}
+
 NSArray<AxsScreenOcrLine *> *axs_screenocr_recognize_image_at_path(NSString *imagePath,
                                                                    NSError **error) {
     NSString *helper = axs_screenocr_helper_path();
@@ -76,8 +103,9 @@ NSArray<AxsScreenOcrLine *> *axs_screenocr_recognize_image_at_path(NSString *ima
 
     posix_spawn_file_actions_t actions;
     posix_spawn_file_actions_init(&actions);
+    // 只把 stdout 接进管道。stderr 留给 helper 自己处理（它已重定向到 /dev/null），
+    // 否则框架日志会混进 JSON，把正常结果判定成「格式不正确」。
     posix_spawn_file_actions_adddup2(&actions, pipeFDs[1], STDOUT_FILENO);
-    posix_spawn_file_actions_adddup2(&actions, pipeFDs[1], STDERR_FILENO);
     posix_spawn_file_actions_addclose(&actions, pipeFDs[0]);
 
     char *arguments[] = {
@@ -120,12 +148,11 @@ NSArray<AxsScreenOcrLine *> *axs_screenocr_recognize_image_at_path(NSString *ima
         return nil;
     }
 
-    NSError *jsonError = nil;
-    id decoded = [NSJSONSerialization JSONObjectWithData:output options:0 error:&jsonError];
+    id decoded = axs_screenocr_decode_payload(output);
     if (![decoded isKindOfClass:[NSDictionary class]]) {
         NSString *raw = [[NSString alloc] initWithData:output encoding:NSUTF8StringEncoding];
         axs_screenocr_log(@"helper output invalid: %@", [raw substringToIndex:MIN(raw.length, 200)]);
-        if (error) *error = jsonError ?: axs_screenocr_error(14, @"识别结果格式异常");
+        if (error) *error = axs_screenocr_error(14, @"识别结果格式异常");
         return nil;
     }
 

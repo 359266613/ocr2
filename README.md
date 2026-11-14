@@ -54,6 +54,19 @@ layout/                                PreferenceLoader 入口
 
 Vision 不在 SpringBoard 里加载：模型在 helper 进程内运行，崩溃只影响单次识别。
 
+## 识别后端
+
+helper 启动后先 `setgid(501)` / `setuid(501)` 降到 mobile，再强制 CPU 后端（`usesCPUOnly`）。
+
+原因是实机验证踩到的两个坑：
+
+| 现象 | 原因 |
+|---|---|
+| `Error loading network -5, -1` | helper 继承了 SpringBoard 的 uid 0，ANE 缓存目录归 mobile，aned 的 XPC 也校验调用者身份，GPU/ANE 后端加载模型失败 |
+| 浮层显示「未能读取数据，因为它格式不正确」 | 父进程把 stderr 也 dup 进了结果管道，`NSLog` 混在 JSON 前面导致解析失败 |
+
+现在 helper 自己把 stderr 重定向到 `/dev/null`，父进程只接 stdout；解析侧再从尾部回溯取最后一个合法 JSON 对象兜底。Accurate 失败会自动降级到 Fast 重试一次。
+
 ## 日志
 
 ```
