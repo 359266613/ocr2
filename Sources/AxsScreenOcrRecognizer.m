@@ -26,17 +26,60 @@ static NSError *axs_screenocr_error(NSInteger code, NSString *message) {
                            userInfo:@{NSLocalizedDescriptionKey: message}];
 }
 
-// 进程内识别跑在 SpringBoard 里，它持有完整的 ANE / Espresso 权限，
-// 所以这里不强制 CPU 后端，交给 Vision 自己挑，速度更快。
-static VNRecognizeTextRequest *axs_screenocr_make_request(VNRequestTextRecognitionLevel level) {
+static VNRecognizeTextRequest *axs_screenocr_make_request(BOOL automatic) {
     VNRecognizeTextRequest *request = [[VNRecognizeTextRequest alloc] init];
-    request.recognitionLevel = level;
-    request.usesLanguageCorrection = YES;
-    request.recognitionLanguages = @[ @"zh-Hans", @"zh-Hant", @"en-US" ];
     if (@available(iOS 16.0, *)) {
-        request.automaticallyDetectsLanguage = YES;
+        request.revision = VNRecognizeTextRequestRevision3;
+    } else if (@available(iOS 14.0, *)) {
+        request.revision = VNRecognizeTextRequestRevision2;
+    }
+    request.recognitionLevel = VNRequestTextRecognitionLevelAccurate;
+    request.usesLanguageCorrection = YES;
+    request.recognitionLanguages = @[ @"zh-Hans", @"en-US" ];
+    if (@available(iOS 16.0, *)) {
+        request.automaticallyDetectsLanguage = automatic;
     }
     return request;
+}
+
+static void axs_screenocr_log_request(VNRecognizeTextRequest *request, NSString *name) {
+    NSError *error = nil;
+    NSArray *languages;
+    if (@available(iOS 15.0, *)) {
+        languages = [request supportedRecognitionLanguagesAndReturnError:&error];
+    } else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        languages = [VNRecognizeTextRequest supportedRecognitionLanguagesForTextRecognitionLevel:request.recognitionLevel
+                                                                                      revision:request.revision error:&error];
+#pragma clang diagnostic pop
+    }
+    axs_screenocr_log(@"vision %@ revision=%lu level=accurate configured=%@ supported=%@ error=%@",
+                      name, (unsigned long)request.revision,
+                      [request.recognitionLanguages componentsJoinedByString:@","],
+                      [languages componentsJoinedByString:@","] ?: @"unknown",
+                      error.localizedDescription ?: @"none");
+}
+
+static void axs_screenocr_log_results(VNRecognizeTextRequest *request, NSString *name) {
+    NSUInteger characters = 0, chinese = 0, invalid = 0, count = 0;
+    double confidence = 0;
+    for (VNRecognizedTextObservation *observation in request.results) {
+        VNRecognizedText *candidate = [[observation topCandidates:1] firstObject];
+        if (!candidate.string.length) continue;
+        count++;
+        confidence += candidate.confidence;
+        characters += candidate.string.length;
+        for (NSUInteger i = 0; i < candidate.string.length; i++) {
+            unichar c = [candidate.string characterAtIndex:i];
+            if ((c >= 0x3400 && c <= 0x9fff) || (c >= 0xf900 && c <= 0xfaff)) chinese++;
+            if (c == 0xffff || c == 0xfffe || c == 0xfffd) invalid++;
+        }
+    }
+    axs_screenocr_log(@"vision %@ result lines=%lu chars=%lu chinese=%lu invalid=%lu confidence=%.3f",
+                      name, (unsigned long)count, (unsigned long)characters,
+                      (unsigned long)chinese, (unsigned long)invalid,
+                      count ? confidence / count : 0.0);
 }
 
 static NSArray<AxsScreenOcrLine *> *axs_screenocr_lines_from_request(VNRecognizeTextRequest *request) {
@@ -75,12 +118,40 @@ NSArray<AxsScreenOcrLine *> *axs_screenocr_recognize_cgimage(CGImageRef image,
     @try {
         VNImageRequestHandler *handler =
             [[VNImageRequestHandler alloc] initWithCGImage:image orientation:orientation options:@{}];
-        request = axs_screenocr_make_request(VNRequestTextRecognitionLevelAccurate);
+        request = axs_screenocr_make_request(NO);
+        axs_screenocr_log_request(request, @"explicit");
         succeeded = [handler performRequests:@[ request ] error:&requestError];
-        if (!succeeded) {
-            request = axs_screenocr_make_request(VNRequestTextRecognitionLevelFast);
-            requestError = nil;
-            succeeded = [handler performRequests:@[ request ] error:&requestError];
+        if (succeeded) {
+            axs_screenocr_log_results(request, @"explicit");
+            axs_screenocr_log(@"vision selected=explicit");
+        } else {
+            axs_screenocr_log(@"vision explicit failed: domain=%@ code=%ld message=%@",
+                              requestError.domain ?: @"unknown", (long)requestError.code,
+                              requestError.localizedDescription ?: @"unknown");
+        }
+
+        if (@available(iOS 16.0, *)) {
+          @try {
+            VNRecognizeTextRequest *comparison = axs_screenocr_make_request(YES);
+            NSError *comparisonError = nil;
+            axs_screenocr_log_request(comparison, @"automatic");
+            BOOL comparisonSucceeded = [handler performRequests:@[ comparison ] error:&comparisonError];
+            if (comparisonSucceeded) {
+                axs_screenocr_log_results(comparison, @"automatic");
+                if (!succeeded) {
+                    request = comparison;
+                    succeeded = YES;
+                    requestError = nil;
+                    axs_screenocr_log(@"vision selected=automatic (explicit failed)");
+                }
+            } else {
+                axs_screenocr_log(@"vision automatic failed: domain=%@ code=%ld message=%@",
+                                  comparisonError.domain ?: @"unknown", (long)comparisonError.code,
+                                  comparisonError.localizedDescription ?: @"unknown");
+            }
+          } @catch (NSException *exception) {
+            axs_screenocr_log(@"vision automatic threw: %@", exception.reason ?: @"unknown");
+          }
         }
     } @catch (NSException *exception) {
         if (error) *error = axs_screenocr_error(31, exception.reason ?: @"识别异常");
@@ -178,7 +249,7 @@ NSArray<AxsScreenOcrLine *> *axs_screenocr_recognize_image_at_path(NSString *ima
 
     posix_spawn_file_actions_t actions;
     posix_spawn_file_actions_init(&actions);
-    // 只把 stdout 接进管道。stderr 留给 helper 自己处理（它已重定向到 /dev/null），
+    // 只把 stdout 接进管道。stderr 由 helper 写入独立日志，
     // 否则框架日志会混进 JSON，把正常结果判定成「格式不正确」。
     posix_spawn_file_actions_adddup2(&actions, pipeFDs[1], STDOUT_FILENO);
     posix_spawn_file_actions_addclose(&actions, pipeFDs[0]);
@@ -225,8 +296,7 @@ NSArray<AxsScreenOcrLine *> *axs_screenocr_recognize_image_at_path(NSString *ima
 
     id decoded = axs_screenocr_decode_payload(output);
     if (![decoded isKindOfClass:[NSDictionary class]]) {
-        NSString *raw = [[NSString alloc] initWithData:output encoding:NSUTF8StringEncoding];
-        axs_screenocr_log(@"helper output invalid: %@", [raw substringToIndex:MIN(raw.length, 200)]);
+        axs_screenocr_log(@"helper output invalid: %lu bytes", (unsigned long)output.length);
         if (error) *error = axs_screenocr_error(14, @"识别结果格式异常");
         return nil;
     }

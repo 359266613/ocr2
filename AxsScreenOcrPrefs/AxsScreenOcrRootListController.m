@@ -49,7 +49,7 @@
 
     axs_screenocr_post_trigger_notification();
     [self axs_screenocr_showAlertWithTitle:@"已发送触发"
-                                   message:@"SpringBoard 已收到触发信号，稍等一两秒应出现识别浮层。\n\n若没有反应，请查看 /var/mobile/Library/Logs/AxsScreenOcr.log：\n· 出现 trigger: darwin notification → 通道正常，问题在截图或识别\n· 只有 self-check → 插件未注入 SpringBoard"];
+                                   message:@"已发送通知，请等待识别浮层。\n\n若没有反应，请查看 /var/mobile/Library/Logs/AxsScreenOcr.log：\n· 出现 trigger: darwin notification 表示通知已到达\n· 只有 self-check 表示插件已加载，但未看到触发通知"];
 }
 
 - (void)axs_screenocr_showAlertWithTitle:(NSString *)title message:(NSString *)message {

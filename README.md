@@ -1,6 +1,6 @@
 # 全屏OCR（ScreenOcr）
 
-SpringBoard 侧的全屏文字识别插件。收到深链接后抓取整屏，交给独立进程做 Vision 离线识别，结果以浮层显示，可直接编辑、复制、分享。
+SpringBoard 侧的全屏文字识别插件。收到触发后抓取整屏，使用 Vision 离线识别，结果以浮层显示，可直接编辑、复制、分享。
 
 - 包名：`com.axs.screenocr`
 - 注入进程：`com.apple.springboard`
@@ -41,7 +41,7 @@ Headers/AxsScreenOcrPrivate.h          SpringBoard 与私有方法的必要声�
 Sources/AxsScreenOcrTrigger.*          URL 匹配与去重
 Sources/AxsScreenOcrRunner.*           抓图 -> 识别 -> 浮层 的编排
 Sources/AxsScreenOcrCapture.*          _UICreateScreenUIImage / UIGetScreenImage 与窗口兜底
-Sources/AxsScreenOcrRecognizer.*       posix_spawn 启动 helper、读取并解析结果
+Sources/AxsScreenOcrRecognizer.*       进程内 Vision 识别及 helper 兜底
 Sources/AxsScreenOcrResultController.* 结果浮层（复制 / 全选 / 分享 / 关闭）
 Sources/AxsScreenOcrLog.*              落盘日志
 Sources/AxsScreenOcrConfig.*           配置快照（只读）
@@ -52,20 +52,15 @@ AxsScreenOcrPrefs/                     PreferenceBundle
 layout/                                PreferenceLoader 入口
 ```
 
-Vision 不在 SpringBoard 里加载：模型在 helper 进程内运行，崩溃只影响单次识别。
+Vision 优先在 SpringBoard 内运行；无结果时才启动 helper 兜底。进程内识别的崩溃可能影响 SpringBoard，需要真机验证稳定性。
 
 ## 识别后端
 
-helper 启动后先 `setgid(501)` / `setuid(501)` 降到 mobile，再强制 CPU 后端（`usesCPUOnly`）。
+主路径使用 Accurate 模式，iOS 16 及以上选用 revision 3，iOS 14/15 选用 revision 2，明确指定简体中文和英文，关闭自动语言检测。iOS 16 及以上还对同一张图运行自动检测作诊断对照；正常情况下展示指定语言的结果，对照结果只记录统计信息。对照会增加耗时。
 
-原因是实机验证踩到的两个坑：
+helper 仅在主路径无结果时运行，尝试降到 mobile 用户并使用 CPU 后端，按不同分辨率重试 Accurate。结果管道只接收 stdout，helper 的 stderr 写入 `AxsScreenOcrHelper.log`。
 
-| 现象 | 原因 |
-|---|---|
-| `Error loading network -5, -1` | helper 继承了 SpringBoard 的 uid 0，ANE 缓存目录归 mobile，aned 的 XPC 也校验调用者身份，GPU/ANE 后端加载模型失败 |
-| 浮层显示「未能读取数据，因为它格式不正确」 | 父进程把 stderr 也 dup 进了结果管道，`NSLog` 混在 JSON 前面导致解析失败 |
-
-现在 helper 自己把 stderr 重定向到 `/dev/null`，父进程只接 stdout；解析侧再从尾部回溯取最后一个合法 JSON 对象兜底。Accurate 失败会自动降级到 Fast 重试一次。
+日志包含截图像素尺寸、请求 revision、支持语言、两组识别行数、中文字符数、异常字符数和平均置信度，不保存识别正文或主路径截图。helper 兜底会临时写入截图，调用结束后删除。
 
 ## 日志
 
@@ -82,6 +77,9 @@ helper 启动后先 `setgid(501)` / `setuid(501)` 降到 mobile，再强制 CPU 
 | `trigger: darwin notification ...` | 收到面板/脚本的通知触发 |
 | `url seen via ...（未匹配触发词）` | URL 到了，但关键词不对 |
 | `capture: _UICreateScreenUIImage size=...` | 抓图成功 |
+| `capture pixels=...` | 截图像素尺寸、缩放与方向 |
+| `vision explicit` / `vision automatic` | 指定语言与自动检测的请求配置和统计 |
+| `vision selected=...` | 最终使用的识别路径 |
 | `recognize finished: N lines, M chars` | 识别完成 |
 | `trigger ignored: plugin disabled` | 面板里没启用 |
 

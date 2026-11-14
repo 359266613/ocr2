@@ -62,6 +62,9 @@ UIImage *axs_screenocr_capture_screen(void) {
             if (image.CGImage) {
                 axs_screenocr_log(@"capture: _UICreateScreenUIImage size=%@",
                                   NSStringFromCGSize(image.size));
+                axs_screenocr_log(@"capture pixels=%zux%zu scale=%.2f orientation=%ld",
+                                  CGImageGetWidth(image.CGImage), CGImageGetHeight(image.CGImage),
+                                  image.scale, (long)image.imageOrientation);
                 return image;
             }
         } @catch (__unused NSException *exception) {
@@ -77,6 +80,9 @@ UIImage *axs_screenocr_capture_screen(void) {
                 CGImageRelease(imageRef);
                 axs_screenocr_log(@"capture: UIGetScreenImage size=%@",
                                   NSStringFromCGSize(image.size));
+                axs_screenocr_log(@"capture pixels=%zux%zu scale=%.2f orientation=%ld",
+                                  CGImageGetWidth(image.CGImage), CGImageGetHeight(image.CGImage),
+                                  image.scale, (long)image.imageOrientation);
                 return image;
             }
         } @catch (__unused NSException *exception) {
@@ -101,5 +107,10 @@ UIImage *axs_screenocr_capture_screen(void) {
     }];
     axs_screenocr_log(@"capture: window render fallback size=%@",
                       NSStringFromCGSize(image.size));
+    if (image.CGImage) {
+        axs_screenocr_log(@"capture pixels=%zux%zu scale=%.2f orientation=%ld",
+                          CGImageGetWidth(image.CGImage), CGImageGetHeight(image.CGImage),
+                          image.scale, (long)image.imageOrientation);
+    }
     return image;
 }

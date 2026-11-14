@@ -17,6 +17,6 @@ AxsScreenOcr_LIBRARIES = substrate
 
 include $(THEOS_MAKE_PATH)/tweak.mk
 
-# Vision 识别放在独立进程，避免在 SpringBoard 里加载模型导致 safemode。
+# helper 用于进程内识别无结果时的兜底。
 SUBPROJECTS += AxsScreenOcrPrefs AxsScreenOcrHelper
 include $(THEOS_MAKE_PATH)/aggregate.mk

@@ -102,6 +102,10 @@ static void axs_screenocr_springboard_open_options(id self, SEL _cmd, id url, id
         // 通道 3：面板「测试触发」直接投递，不经过 URL 分发，不受 scheme 限制。
         axs_screenocr_observe_trigger_notification(^{
             axs_screenocr_log(@"trigger: darwin notification %@", AxsScreenOcrTriggerNotificationName);
+            if (![[AxsScreenOcrConfig axs_screenocr_shared] axs_screenocr_isEnabled]) {
+                axs_screenocr_log(@"trigger ignored: plugin disabled in preferences");
+                return;
+            }
             [AxsScreenOcrRunner axs_screenocr_run];
         });
 

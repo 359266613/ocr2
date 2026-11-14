@@ -62,14 +62,18 @@ static int axs_screenocr_helper_fail(NSString *message, int code) {
 
 // 统一构造识别请求。越狱 helper 没有 ANE entitlement，Espresso 走 GPU/ANE 后端时
 // 会报 "Error loading network -5, -1"，强制 CPU 后端后可以稳定出结果。
-static VNRecognizeTextRequest *axs_screenocr_helper_request(VNRequestTextRecognitionLevel level) {
+static VNRecognizeTextRequest *axs_screenocr_helper_request(void) {
     VNRecognizeTextRequest *request = [[VNRecognizeTextRequest alloc] init];
-    request.recognitionLevel = level;
-    request.usesLanguageCorrection = YES;
-    request.recognitionLanguages = @[ @"zh-Hans", @"zh-Hant", @"en-US" ];
     if (@available(iOS 16.0, *)) {
-        // 让系统按画面内容自动判断语种，混合排版更稳。
-        request.automaticallyDetectsLanguage = YES;
+        request.revision = VNRecognizeTextRequestRevision3;
+    } else if (@available(iOS 14.0, *)) {
+        request.revision = VNRecognizeTextRequestRevision2;
+    }
+    request.recognitionLevel = VNRequestTextRecognitionLevelAccurate;
+    request.usesLanguageCorrection = YES;
+    request.recognitionLanguages = @[ @"zh-Hans", @"en-US" ];
+    if (@available(iOS 16.0, *)) {
+        request.automaticallyDetectsLanguage = NO;
     }
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -113,7 +117,6 @@ static CGImageRef axs_screenocr_helper_scaled_copy(CGImageRef image, CGFloat fac
 // 跑一轮识别。返回 YES 表示请求本身跑通了（lines 可能为空，即画面无文字）；
 // 返回 NO 表示框架层失败（例如申请不到像素缓冲），原因写进 outError。
 static BOOL axs_screenocr_helper_perform(CGImageRef image,
-                                         VNRequestTextRecognitionLevel level,
                                          NSMutableArray<NSDictionary *> *lines,
                                          NSError **outError) {
     NSError *error = nil;
@@ -123,7 +126,7 @@ static BOOL axs_screenocr_helper_perform(CGImageRef image,
     @try {
         VNImageRequestHandler *handler =
             [[VNImageRequestHandler alloc] initWithCGImage:image options:@{}];
-        request = axs_screenocr_helper_request(level);
+        request = axs_screenocr_helper_request();
         succeeded = [handler performRequests:@[ request ] error:&error];
     } @catch (NSException *exception) {
         if (outError) {
@@ -137,8 +140,7 @@ static BOOL axs_screenocr_helper_perform(CGImageRef image,
 
     if (!succeeded) {
         if (outError) *outError = error;
-        axs_screenocr_helper_note(@"level=%ld failed: %@",
-                                  (long)level, axs_screenocr_helper_describe(error));
+        axs_screenocr_helper_note(@"accurate failed: %@", axs_screenocr_helper_describe(error));
         return NO;
     }
 
@@ -177,9 +179,7 @@ static void axs_screenocr_helper_selftest(void) {
 
     NSMutableArray<NSDictionary *> *lines = [NSMutableArray array];
     NSError *error = nil;
-    BOOL performed = axs_screenocr_helper_perform(probe,
-                                                  VNRequestTextRecognitionLevelFast,
-                                                  lines, &error);
+    BOOL performed = axs_screenocr_helper_perform(probe, lines, &error);
     axs_screenocr_helper_note(@"selftest 128x128 -> %@", performed
                               ? @"vision usable (buffer size is the problem)"
                               : axs_screenocr_helper_describe(error));
@@ -231,16 +231,7 @@ int main(int argc, char *argv[]) {
 
             NSError *error = nil;
             [lines removeAllObjects];
-            BOOL performed = axs_screenocr_helper_perform(scaled,
-                                                          VNRequestTextRecognitionLevelAccurate,
-                                                          lines, &error);
-            if (!performed) {
-                // Accurate 失败时降级到 Fast 再试一次，两轮都失败才换下一档分辨率。
-                [lines removeAllObjects];
-                performed = axs_screenocr_helper_perform(scaled,
-                                                         VNRequestTextRecognitionLevelFast,
-                                                         lines, &error);
-            }
+            BOOL performed = axs_screenocr_helper_perform(scaled, lines, &error);
 
             axs_screenocr_helper_note(@"attempt %.3f at %zux%zu -> %@ (lines=%lu)", factor,
                                       CGImageGetWidth(scaled), CGImageGetHeight(scaled),

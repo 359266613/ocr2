@@ -2,3 +2,6 @@
 packages/
 *.deb
 .DS_Store
+*.jpg
+*.log
+*.png
