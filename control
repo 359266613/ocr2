@@ -1,9 +1,11 @@
-Package: com.359266613.screenocr
-Name: ScreenOCR
-Version: 2.0.0
+Package: com.axs.screenocr
+Name: 全屏OCR
+Version: 5.2.0
 Architecture: iphoneos-arm
-Description: 全屏 OCR 文字识别。深链接触发 prefs:root=axsocr_recognize（可绑 GesturePro 手势），也支持双指长按；结果可编辑 / 复制 / 框选 / 分享。
-Maintainer: 359266613
-Author: 359266613
-Section: Tweaks
-Depends: mobilesubstrate, firmware (>= 15.0)
+Description: 深链接或手势触发全屏文字识别，结果可编辑、复制与分享
+Maintainer: Axs
+Author: Axs
+Section: Axs-Tweaks
+Depends: mobilesubstrate, preferenceloader
+Icon: https://axs66.github.io/pro/icon/screenocr.png
+Sileodepiction: https://axs66.github.io/pro/sileodepiction/screenocr/js.json

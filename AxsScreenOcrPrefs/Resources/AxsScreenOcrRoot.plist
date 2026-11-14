@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>title</key><string>全屏OCR</string>
+    <key>items</key>
+    <array>
+        <dict>
+            <key>cell</key><string>PSGroupCell</string>
+            <key>label</key><string>基本设置</string>
+            <key>footerText</key><string>关闭后深链接会按原样交给系统处理，插件不做任何拦截。</string>
+        </dict>
+        <dict>
+            <key>cell</key><string>PSSwitchCell</string>
+            <key>label</key><string>启用插件</string>
+            <key>key</key><string>enabled</string>
+            <key>defaults</key><string>com.axs.screenocr</string>
+            <key>default</key><false/>
+        </dict>
+        <dict>
+            <key>cell</key><string>PSGroupCell</string>
+            <key>label</key><string>触发方式</string>
+            <key>footerText</key><string>在 GesturePro 等工具的「预设链接」动作里填写 prefs:root=axsocr_recognize。触发后抓取当前整屏，识别结果以浮层显示，可直接编辑、复制或分享。</string>
+        </dict>
+    </array>
+</dict>
+</plist>

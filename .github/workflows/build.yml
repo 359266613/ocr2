@@ -1,4 +1,4 @@
-name: Build ocr2
+name: Build ScreenOcr
 
 on:
   workflow_dispatch:
@@ -25,8 +25,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - build_variant: rootless
           # - build_variant: rootful
+          - build_variant: rootless
           # - build_variant: roothide
 
     steps:
@@ -47,8 +47,7 @@ jobs:
       - name: Bump Package Version
         id: bump
         run: |
-          BASE=$(grep '^Version:' control | head -1 | awk '{print $2}' | cut -d- -f1)
-          VERSION="${BASE}-${{ github.run_number }}"
+          VERSION="5.2.0-${{ github.run_number }}"
           echo "Using version: $VERSION"
           sed -i '' "s/^Version: .*/Version: ${VERSION}/" control
           echo "package_version=${VERSION}" >> "$GITHUB_OUTPUT"
@@ -99,5 +98,5 @@ jobs:
         with:
           token: ${{ github.token }}
           tag_name: v${{ steps.bump.outputs.package_version }}
-          name: ocr2 v${{ steps.bump.outputs.package_version }}
+          name: "全屏OCR v${{ steps.bump.outputs.package_version }}"
           files: ./packages/*.deb
