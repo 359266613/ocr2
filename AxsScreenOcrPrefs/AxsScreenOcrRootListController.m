@@ -1,10 +1,12 @@
 #import "AxsScreenOcrRootListController.h"
+#import "AxsScreenOcrNotify.h"
 #import "AxsScreenOcrPreferences.h"
 #import <Preferences/PSSpecifier.h>
 #import <UIKit/UIKit.h>
 
 
 @interface AxsScreenOcrRootListController ()
+- (void)axs_screenocr_showAlertWithTitle:(NSString *)title message:(NSString *)message;
 @end
 
 @implementation AxsScreenOcrRootListController
@@ -32,18 +34,30 @@
     return _specifiers;
 }
 
-// 走和 GesturePro 完全相同的入口：由 SpringBoard 的 applicationOpenURL: 接管。
+// 面板里的「测试触发」不能走 URL：iOS 16 起 App 进程打开 prefs: 链接会被系统
+// 直接拒绝（completionHandler 收到 success = NO），URL 根本到不了 SpringBoard。
+// 所以这里改用 Darwin 通知，直接叫醒 SpringBoard 侧的插件，用来验证插件本体
+// 是否正常（截图 / 识别 / 浮层），与 GesturePro 的深链接是两条独立通道。
 - (void)axs_screenocr_test_trigger:(id)sender {
-    NSURL *url = [NSURL URLWithString:@"prefs:root=axsocr_recognize"];
-    [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:^(BOOL success) {
-        if (!success) {
-            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"触发失败"
-                message:@"系统拒绝了这条链接。请确认插件已启用并已注销桌面。"
-                preferredStyle:UIAlertControllerStyleAlert];
-            [alert addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleDefault handler:nil]];
-            [self presentViewController:alert animated:YES completion:nil];
-        }
-    }];
+    NSDictionary *preferences = axs_screenocr_readPreferences();
+    BOOL enabled = [preferences[@"enabled"] boolValue];
+    if (!enabled) {
+        [self axs_screenocr_showAlertWithTitle:@"插件未启用"
+                                       message:@"请先打开上方「启用插件」开关，再点一次测试。"];
+        return;
+    }
+
+    axs_screenocr_post_trigger_notification();
+    [self axs_screenocr_showAlertWithTitle:@"已发送触发"
+                                   message:@"SpringBoard 已收到触发信号，稍等一两秒应出现识别浮层。\n\n若没有反应，请查看 /var/mobile/Library/Logs/AxsScreenOcr.log：\n· 出现 trigger: darwin notification → 通道正常，问题在截图或识别\n· 只有 self-check → 插件未注入 SpringBoard"];
+}
+
+- (void)axs_screenocr_showAlertWithTitle:(NSString *)title message:(NSString *)message {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:title
+                                                                  message:message
+                                                           preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)axs_screenocr_addButton:(NSString *)title action:(SEL)action to:(NSMutableArray *)items {

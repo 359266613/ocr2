@@ -20,7 +20,7 @@
         <dict>
             <key>cell</key><string>PSGroupCell</string>
             <key>label</key><string>触发方式</string>
-            <key>footerText</key><string>在 GesturePro 等工具的「预设链接」动作里填写 prefs:root=axsocr_recognize。触发后抓取当前整屏，识别结果以浮层显示，可直接编辑、复制或分享。</string>
+            <key>footerText</key><string>在 GesturePro 等工具的「预设链接」动作里填写 prefs:root=axsocr_recognize。下面的「测试触发」走独立的通知通道，不依赖深链接，用来验证插件本体是否正常。</string>
         </dict>
     </array>
 </dict>

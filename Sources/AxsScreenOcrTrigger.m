@@ -29,6 +29,28 @@ BOOL axs_screenocr_url_matches(NSURL *url) {
     return NO;
 }
 
+// 只记录可能相关的 URL，避免每条系统链接都往日志里塞一行。
+static BOOL axs_screenocr_url_is_interesting(NSURL *url) {
+    if (!url) return NO;
+    NSString *absolute = url.absoluteString.lowercaseString ?: @"";
+    if (absolute.length == 0) return NO;
+
+    NSString *scheme = url.scheme.lowercaseString ?: @"";
+    if ([scheme isEqualToString:@"prefs"] ||
+        [scheme isEqualToString:@"app-prefs"] ||
+        [scheme isEqualToString:@"axs-screenocr"] ||
+        [scheme isEqualToString:@"screenocr"]) {
+        return YES;
+    }
+    return [absolute containsString:@"ocr"];
+}
+
+void axs_screenocr_note_url(NSURL *url, NSString *source) {
+    if (!axs_screenocr_url_is_interesting(url)) return;
+    if (axs_screenocr_url_matches(url)) return;  // 匹配的走 handle_url，那里已经记过
+    axs_screenocr_log(@"url seen via %@: %@（未匹配触发词）", source, url.absoluteString);
+}
+
 BOOL axs_screenocr_handle_url(NSURL *url) {
     if (!axs_screenocr_url_matches(url)) return NO;
 

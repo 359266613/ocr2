@@ -8,16 +8,30 @@ SpringBoard 侧的全屏文字识别插件。收到深链接后抓取整屏，�
 
 ## 触发方式
 
-在 GesturePro 或其他支持深链接的工具里，把动作设为「预设链接」，填写：
+### 深链接（GesturePro 等手势工具）
+
+把动作设为「预设链接」，填写：
 
 ```
 prefs:root=axsocr_recognize
 ```
 
 也兼容 `axs_screenocr_recognize`、`axs-screenocr://recognize`、`screenocr://recognize`。
-插件通过 `-[SpringBoard applicationOpenURL:]` 消费该 URL，不会真的跳到「设置」。
+GesturePro 的「预设链接」直接调用 `-[SpringBoard applicationOpenURL:]`，插件在这个入口消费 URL，不会真的跳到「设置」。
 
-设置面板里的「测试触发一次识别」走的是同一条链路，用来确认插件是否生效。
+插件同时挂了 `-[LSApplicationWorkspace openSensitiveURL:withOptions:]` 与 `-openURL:withOptions:`——iOS 16 上 `prefs:` 链接真正的打开入口，作为兜底。
+
+### 通知通道（面板自测 / 脚本）
+
+```
+notifyutil -p com.axs.screenocr.trigger
+```
+
+或调用设置面板里的「测试触发一次识别」。
+
+> **为什么面板测试不走深链接**：iOS 16 起 App 进程（含设置面板所在的 Preferences）调用 `-[UIApplication openURL:]` 打开 `prefs:` 会被系统直接拒绝，`completionHandler` 收到 `success = NO`，URL 根本不会交给 SpringBoard。之前版本的面板按钮因此必然弹「触发失败」，那是系统拦截，不是插件没生效。
+
+三条通道互相独立，任意一条命中即可触发。设置面板测试成功，说明截图、识别、浮层整条链路都正常，剩下的只有手势工具那一侧。
 
 ## 工程结构
 
@@ -49,11 +63,16 @@ Vision 不在 SpringBoard 里加载：模型在 helper 进程内运行，崩溃�
 | 日志 | 含义 |
 |---|---|
 | `loaded: com.apple.springboard` | 插件已注入 |
+| `self-check: hooks sbOptions=1 sensitive=1 workspaceOpen=1` | 三个 URL hook 都挂上了 |
 | `self-check: ... capture=1` | 私有截图接口可用 |
 | `trigger: prefs:root=axsocr_recognize` | 收到深链接 |
+| `trigger: darwin notification ...` | 收到面板/脚本的通知触发 |
+| `url seen via ...（未匹配触发词）` | URL 到了，但关键词不对 |
 | `capture: _UICreateScreenUIImage size=...` | 抓图成功 |
 | `recognize finished: N lines, M chars` | 识别完成 |
 | `trigger ignored: plugin disabled` | 面板里没启用 |
+
+排查顺序：有 `trigger:` 说明通道通，问题在截图/识别；只有 `self-check:` 说明触发没到，看 `hooks` 那行的三个数字哪个是 0。
 
 ## 构建
 
