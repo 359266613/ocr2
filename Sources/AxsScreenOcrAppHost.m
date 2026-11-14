@@ -5,9 +5,6 @@
 #import <objc/runtime.h>
 #import <SpringBoardServices/SpringBoardServices.h>
 
-// Copy ownership is not annotated in older Theos versions of this private header.
-extern NSString *SBSCopyFrontmostApplicationDisplayIdentifier(void) NS_RETURNS_RETAINED;
-
 @interface LSApplicationWorkspace : NSObject
 + (instancetype)defaultWorkspace;
 - (void)openApplicationWithBundleID:(NSString *)identifier;
@@ -15,7 +12,8 @@ extern NSString *SBSCopyFrontmostApplicationDisplayIdentifier(void) NS_RETURNS_R
 
 NSString *axs_screenocr_front_application(void) {
     @try {
-        return SBSCopyFrontmostApplicationDisplayIdentifier();
+        // Theos leaves this Copy-owned return value unannotated.
+        return CFBridgingRelease((__bridge CFStringRef)SBSCopyFrontmostApplicationDisplayIdentifier());
     } @catch (NSException *exception) {
         axs_screenocr_log(@"foreground lookup failed: %@", exception.reason ?: exception.name);
         return nil;
