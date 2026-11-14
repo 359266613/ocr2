@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- helper 由 SpringBoard posix_spawn 启动，是裸二进制而非 App 容器进程。
+	     缺少这些权限时，Vision 内部申请 IOSurface 后端的 CVPixelBuffer 会被拒，
+	     报 "Failed to create CVPixelBuffer. Width = ... Format = 420f"。 -->
+	<key>platform-application</key>
+	<true/>
+	<key>com.apple.private.security.no-sandbox</key>
+	<true/>
+	<key>com.apple.private.security.container-required</key>
+	<false/>
+	<key>com.apple.private.iosurface</key>
+	<true/>
+	<key>get-task-allow</key>
+	<false/>
+</dict>
+</plist>

@@ -74,8 +74,13 @@ static BOOL axsScreenOcrRunning = NO;
                 return;
             }
             NSString *message = error.localizedDescription ?: @"未识别到文字";
+            // helper 会把多档分辨率的失败原因串在一起返回，浮层只展示开头，其余进日志。
+            if (message.length > 180) {
+                message = [[message substringToIndex:180] stringByAppendingString:@"…"];
+            }
             [AxsScreenOcrResultController
-                axs_screenocr_present_text:[NSString stringWithFormat:@"%@\n\n可尝试：\n· 放大画面后重新触发\n· 确认界面不是纯图片或安全界面", message]];
+                axs_screenocr_present_text:[NSString stringWithFormat:
+                    @"%@\n\n可尝试：\n· 重新触发一次\n· 详情见 /var/mobile/Library/Logs/AxsScreenOcrHelper.log", message]];
         });
     });
 }
