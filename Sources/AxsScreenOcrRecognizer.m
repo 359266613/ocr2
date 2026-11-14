@@ -2,7 +2,9 @@
 #import "AxsScreenOcrLog.h"
 #import "AxsScreenOcrPaths.h"
 
+#import <Vision/Vision.h>
 #import <errno.h>
+#import <math.h>
 #import <signal.h>
 #import <spawn.h>
 #import <sys/select.h>
@@ -23,6 +25,78 @@ static NSError *axs_screenocr_error(NSInteger code, NSString *message) {
     return [NSError errorWithDomain:AxsScreenOcrErrorDomain code:code
                            userInfo:@{NSLocalizedDescriptionKey: message}];
 }
+
+// 进程内识别跑在 SpringBoard 里，它持有完整的 ANE / Espresso 权限，
+// 所以这里不强制 CPU 后端，交给 Vision 自己挑，速度更快。
+static VNRecognizeTextRequest *axs_screenocr_make_request(VNRequestTextRecognitionLevel level) {
+    VNRecognizeTextRequest *request = [[VNRecognizeTextRequest alloc] init];
+    request.recognitionLevel = level;
+    request.usesLanguageCorrection = YES;
+    request.recognitionLanguages = @[ @"zh-Hans", @"zh-Hant", @"en-US" ];
+    if (@available(iOS 16.0, *)) {
+        request.automaticallyDetectsLanguage = YES;
+    }
+    return request;
+}
+
+static NSArray<AxsScreenOcrLine *> *axs_screenocr_lines_from_request(VNRecognizeTextRequest *request) {
+    NSMutableArray<AxsScreenOcrLine *> *lines = [NSMutableArray array];
+    for (VNRecognizedTextObservation *observation in request.results) {
+        VNRecognizedText *candidate = [[observation topCandidates:1] firstObject];
+        if (candidate.string.length == 0) continue;
+        AxsScreenOcrLine *line = [[AxsScreenOcrLine alloc] init];
+        line.text = candidate.string;
+        line.box = observation.boundingBox;
+        [lines addObject:line];
+    }
+    // Vision 返回顺序不保证阅读顺序，按行（y 降序）再按列（x 升序）重排。
+    [lines sortUsingComparator:^NSComparisonResult(AxsScreenOcrLine *left, AxsScreenOcrLine *right) {
+        if (fabs(left.box.origin.y - right.box.origin.y) > 0.01) {
+            return left.box.origin.y > right.box.origin.y ? NSOrderedAscending : NSOrderedDescending;
+        }
+        if (left.box.origin.x == right.box.origin.x) return NSOrderedSame;
+        return left.box.origin.x < right.box.origin.x ? NSOrderedAscending : NSOrderedDescending;
+    }];
+    return lines;
+}
+
+NSArray<AxsScreenOcrLine *> *axs_screenocr_recognize_cgimage(CGImageRef image,
+                                                             CGImagePropertyOrientation orientation,
+                                                             NSError **error) {
+    if (!image) {
+        if (error) *error = axs_screenocr_error(30, @"截图数据无效");
+        return nil;
+    }
+
+    NSError *requestError = nil;
+    BOOL succeeded = NO;
+    VNRecognizeTextRequest *request = nil;
+
+    @try {
+        VNImageRequestHandler *handler =
+            [[VNImageRequestHandler alloc] initWithCGImage:image orientation:orientation options:@{}];
+        request = axs_screenocr_make_request(VNRequestTextRecognitionLevelAccurate);
+        succeeded = [handler performRequests:@[ request ] error:&requestError];
+        if (!succeeded) {
+            request = axs_screenocr_make_request(VNRequestTextRecognitionLevelFast);
+            requestError = nil;
+            succeeded = [handler performRequests:@[ request ] error:&requestError];
+        }
+    } @catch (NSException *exception) {
+        if (error) *error = axs_screenocr_error(31, exception.reason ?: @"识别异常");
+        axs_screenocr_log(@"in-process recognition threw: %@", exception.reason ?: @"(nil)");
+        return nil;
+    }
+
+    if (!succeeded) {
+        NSString *message = requestError.localizedDescription ?: @"识别失败";
+        if (error) *error = axs_screenocr_error(32, message);
+        axs_screenocr_log(@"in-process recognition failed: %@", message);
+        return nil;
+    }
+    return axs_screenocr_lines_from_request(request);
+}
+
 
 NSString *axs_screenocr_helper_path(void) {
     return axs_screenocr_resourcePath(@"/usr/libexec/AxsScreenOcrHelper");

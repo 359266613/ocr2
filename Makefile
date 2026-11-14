@@ -12,7 +12,7 @@ include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = AxsScreenOcr
 AxsScreenOcr_FILES = $(wildcard Hooks/*.xm Sources/*.m)
 AxsScreenOcr_CFLAGS = -fobjc-arc -I./Headers -I./Sources
-AxsScreenOcr_FRAMEWORKS = UIKit Foundation CoreFoundation
+AxsScreenOcr_FRAMEWORKS = UIKit Foundation CoreFoundation Vision ImageIO
 AxsScreenOcr_LIBRARIES = substrate
 
 include $(THEOS_MAKE_PATH)/tweak.mk

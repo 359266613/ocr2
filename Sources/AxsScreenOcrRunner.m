@@ -7,6 +7,34 @@
 
 static BOOL axsScreenOcrRunning = NO;
 
+static CGImagePropertyOrientation axs_screenocr_orientation(UIImageOrientation orientation) {
+    switch (orientation) {
+        case UIImageOrientationDown: return kCGImagePropertyOrientationDown;
+        case UIImageOrientationLeft: return kCGImagePropertyOrientationLeft;
+        case UIImageOrientationRight: return kCGImagePropertyOrientationRight;
+        case UIImageOrientationUpMirrored: return kCGImagePropertyOrientationUpMirrored;
+        case UIImageOrientationDownMirrored: return kCGImagePropertyOrientationDownMirrored;
+        case UIImageOrientationLeftMirrored: return kCGImagePropertyOrientationLeftMirrored;
+        case UIImageOrientationRightMirrored: return kCGImagePropertyOrientationRightMirrored;
+        case UIImageOrientationUp:
+        default:
+            return kCGImagePropertyOrientationUp;
+    }
+}
+
+// 只有走兜底路径才需要落盘，进程内识别直接用内存里的 CGImage。
+static NSString *axs_screenocr_write_temp_png(UIImage *image) {
+    NSString *directory = axs_screenocr_workDirectoryPath();
+    [[NSFileManager defaultManager] createDirectoryAtPath:directory
+                              withIntermediateDirectories:YES attributes:nil error:NULL];
+    NSString *imagePath = [directory stringByAppendingPathComponent:
+        [NSString stringWithFormat:@"shot-%.0f.png", [[NSDate date] timeIntervalSince1970] * 1000]];
+
+    NSData *png = UIImagePNGRepresentation(image);
+    if (!png || ![png writeToFile:imagePath atomically:YES]) return nil;
+    return imagePath;
+}
+
 @implementation AxsScreenOcrRunner
 
 + (void)axs_screenocr_run {
@@ -37,33 +65,46 @@ static BOOL axsScreenOcrRunning = NO;
         return;
     }
 
-    NSString *directory = axs_screenocr_workDirectoryPath();
-    [[NSFileManager defaultManager] createDirectoryAtPath:directory
-                              withIntermediateDirectories:YES attributes:nil error:NULL];
-    NSString *imagePath = [directory stringByAppendingPathComponent:
-        [NSString stringWithFormat:@"shot-%.0f.png", [[NSDate date] timeIntervalSince1970] * 1000]];
-
-    NSData *png = UIImagePNGRepresentation(image);
-    if (!png || ![png writeToFile:imagePath atomically:YES]) {
-        axsScreenOcrRunning = NO;
-        axs_screenocr_log(@"run aborted: cannot write %@", imagePath);
-        [AxsScreenOcrResultController
-            axs_screenocr_present_text:@"无法写入临时截图文件，请检查 /var/mobile/Library/Caches 权限。"];
-        return;
-    }
+    CGImagePropertyOrientation orientation = axs_screenocr_orientation(image.imageOrientation);
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSError *error = nil;
-        NSArray<AxsScreenOcrLine *> *lines = axs_screenocr_recognize_image_at_path(imagePath, &error);
-        [[NSFileManager defaultManager] removeItemAtPath:imagePath error:NULL];
 
-        NSTimeInterval elapsed = -[startedAt timeIntervalSinceNow];
+        // 主路径：在本进程直接识别。Vision 的 OCR 模型由 Espresso 加载，
+        // 需要 ANE / GPU 后端权限，而这份权限只授予 App 与系统进程；
+        // 独立 helper 即使签了 platform-application 也拿不到。
+        NSArray<AxsScreenOcrLine *> *lines =
+            axs_screenocr_recognize_cgimage(image.CGImage, orientation, &error);
+        axs_screenocr_log(@"in-process pass: %lu lines, error=%@",
+                          (unsigned long)lines.count,
+                          error.localizedDescription ?: @"none");
+
+        // 兜底：进程内失败才落盘交给独立进程，省掉一次多余的 PNG 编码。
+        if (lines.count == 0) {
+            NSString *imagePath = axs_screenocr_write_temp_png(image);
+            if (imagePath) {
+                NSError *fallbackError = nil;
+                NSArray<AxsScreenOcrLine *> *fallback =
+                    axs_screenocr_recognize_image_at_path(imagePath, &fallbackError);
+                [[NSFileManager defaultManager] removeItemAtPath:imagePath error:NULL];
+                if (fallback.count > 0) {
+                    lines = fallback;
+                    error = nil;
+                } else if (fallbackError) {
+                    error = fallbackError;
+                }
+                axs_screenocr_log(@"helper fallback: %lu lines",
+                                  (unsigned long)fallback.count);
+            }
+        }
+
         NSMutableString *text = [NSMutableString string];
         for (AxsScreenOcrLine *line in lines) {
             if (text.length > 0) [text appendString:@"\n"];
             [text appendString:line.text];
         }
 
+        NSTimeInterval elapsed = -[startedAt timeIntervalSinceNow];
         axs_screenocr_log(@"recognize finished: %lu lines, %lu chars, %.0f ms",
                           (unsigned long)lines.count, (unsigned long)text.length, elapsed * 1000.0);
 
@@ -80,7 +121,7 @@ static BOOL axsScreenOcrRunning = NO;
             }
             [AxsScreenOcrResultController
                 axs_screenocr_present_text:[NSString stringWithFormat:
-                    @"%@\n\n可尝试：\n· 重新触发一次\n· 详情见 /var/mobile/Library/Logs/AxsScreenOcrHelper.log", message]];
+                    @"%@\n\n可尝试：\n· 重新触发一次\n· 详情见 /var/mobile/Library/Logs/AxsScreenOcr.log", message]];
         });
     });
 }
