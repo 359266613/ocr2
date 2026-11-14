@@ -1,14 +1,8 @@
 #import "AxsScreenOcrCapture.h"
 #import "AxsScreenOcrLog.h"
+#import "AxsScreenOcrPrivate.h"
 
-NS_ASSUME_NONNULL_BEGIN
-
-// UIKit 私有截图接口。越狱环境可直接调用，拿到的图包含状态栏与键盘；
-// 用弱引用声明，系统移除该符号时自动走兜底，不会在加载阶段崩溃。
-extern UIImage *_Nullable _UICreateScreenUIImage(void) __attribute__((weak_import));
-extern CGImageRef _Nullable UIGetScreenImage(void) __attribute__((weak_import));
-
-UIWindowScene * _Nullable axs_screenocr_active_window_scene(void) {
+UIWindowScene *axs_screenocr_active_window_scene(void) {
     UIApplication *application = [UIApplication sharedApplication];
     UIWindowScene *fallback = nil;
     for (UIScene *scene in application.connectedScenes) {
@@ -21,8 +15,10 @@ UIWindowScene * _Nullable axs_screenocr_active_window_scene(void) {
     return fallback;
 }
 
-UIWindow * _Nullable axs_screenocr_key_window(void) {
+UIWindow *axs_screenocr_key_window(void) {
     UIWindowScene *scene = axs_screenocr_active_window_scene();
+    if (!scene) return nil;
+
     UIWindow *candidate = nil;
     for (UIWindow *window in scene.windows) {
         if (window.isHidden || window.alpha <= 0.01) continue;
@@ -37,7 +33,7 @@ BOOL axs_screenocr_capture_available(void) {
     return _UICreateScreenUIImage != NULL || UIGetScreenImage != NULL;
 }
 
-UIImage * _Nullable axs_screenocr_capture_screen(void) {
+UIImage *axs_screenocr_capture_screen(void) {
     if (_UICreateScreenUIImage) {
         @try {
             UIImage *image = _UICreateScreenUIImage();
@@ -85,5 +81,3 @@ UIImage * _Nullable axs_screenocr_capture_screen(void) {
                       NSStringFromCGSize(image.size));
     return image;
 }
-
-NS_ASSUME_NONNULL_END

@@ -11,7 +11,6 @@
 
 extern char **environ;
 
-NS_ASSUME_NONNULL_BEGIN
 
 static NSString * const AxsScreenOcrErrorDomain = @"com.axs.screenocr";
 static const int AxsScreenOcrRecognizeTimeout = 25;
@@ -24,7 +23,7 @@ static NSError *axs_screenocr_error(NSInteger code, NSString *message) {
                            userInfo:@{NSLocalizedDescriptionKey: message}];
 }
 
-NSString * _Nullable axs_screenocr_helper_path(void) {
+NSString *axs_screenocr_helper_path(void) {
     return axs_screenocr_resourcePath(@"/usr/libexec/AxsScreenOcrHelper");
 }
 
@@ -60,8 +59,8 @@ static BOOL axs_screenocr_read_pipe(int fd, NSMutableData *output, int timeoutSe
     }
 }
 
-NSArray<AxsScreenOcrLine *> * _Nullable
-axs_screenocr_recognize_image_at_path(NSString *imagePath, NSError **error) {
+NSArray<AxsScreenOcrLine *> *axs_screenocr_recognize_image_at_path(NSString *imagePath,
+                                                                   NSError **error) {
     NSString *helper = axs_screenocr_helper_path();
     if (helper.length == 0 || ![[NSFileManager defaultManager] isExecutableFileAtPath:helper]) {
         if (error) *error = axs_screenocr_error(10, @"识别组件缺失，请重新安装插件");
@@ -156,4 +155,3 @@ axs_screenocr_recognize_image_at_path(NSString *imagePath, NSError **error) {
     return lines;
 }
 
-NS_ASSUME_NONNULL_END

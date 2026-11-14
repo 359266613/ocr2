@@ -11,3 +11,8 @@ NS_ASSUME_NONNULL_BEGIN
 @end
 
 NS_ASSUME_NONNULL_END
+
+// UIKit 私有整屏截图接口。用弱引用声明，系统移除符号时自动走兜底，
+// 不会在 dylib 加载阶段因为找不到符号而崩溃。
+extern UIImage *_UICreateScreenUIImage(void) __attribute__((weak_import));
+extern CGImageRef UIGetScreenImage(void) __attribute__((weak_import));
