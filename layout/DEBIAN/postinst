@@ -1,0 +1,22 @@
+#!/bin/sh
+set -eu
+case "${1:-}" in
+    configure)
+        PACKAGE="${DPKG_MAINTSCRIPT_PACKAGE:-com.axs.screenocr}"
+        INFO="$(dpkg-query -L "$PACKAGE" | awk '/\/Applications\/AxsScreenOcrWorker[.]app\/Info[.]plist$/ { print; exit }')"
+        if [ -z "$INFO" ]; then
+            echo "AxsScreenOcr: worker app is missing from the package" >&2
+            exit 1
+        fi
+        APP="${INFO%/Info.plist}"
+        PREFIX="${APP%/Applications/AxsScreenOcrWorker.app}"
+        UICACHE="$PREFIX/usr/bin/uicache"
+        if [ ! -x "$UICACHE" ]; then UICACHE="$(command -v uicache || true)"; fi
+        if [ -z "$UICACHE" ] || [ ! -x "$UICACHE" ]; then
+            echo "AxsScreenOcr: uicache is required to register the worker app" >&2
+            exit 1
+        fi
+        "$UICACHE" -p "$APP"
+        ;;
+esac
+exit 0

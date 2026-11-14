@@ -12,13 +12,13 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic) CGRect box;
 @end
 
-// This transport only launches the helper; it never executes Vision in its caller.
+// LaunchServices opens the UIKit worker; this transport never runs Vision.
 FOUNDATION_EXPORT NSArray<AxsScreenOcrLine *> * _Nullable
 axs_screenocr_recognize_image_at_path(NSString *imagePath,
                                       CGImagePropertyOrientation orientation,
                                       NSError **error);
 
-// Same transport, without segmentation, for the explicit host comparison.
+// Same app transport, without segmentation, for the explicit host comparison.
 FOUNDATION_EXPORT NSArray<AxsScreenOcrLine *> * _Nullable
 axs_screenocr_recognize_single_image_at_path(NSString *imagePath, NSError **error);
 

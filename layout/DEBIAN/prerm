@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+case "${1:-}" in
+    remove|deconfigure)
+        PACKAGE="${DPKG_MAINTSCRIPT_PACKAGE:-com.axs.screenocr}"
+        INFO="$(dpkg-query -L "$PACKAGE" | awk '/\/Applications\/AxsScreenOcrWorker[.]app\/Info[.]plist$/ { print; exit }')"
+        if [ -n "$INFO" ]; then
+            APP="${INFO%/Info.plist}"
+            PREFIX="${APP%/Applications/AxsScreenOcrWorker.app}"
+            UICACHE="$PREFIX/usr/bin/uicache"
+            if [ ! -x "$UICACHE" ]; then UICACHE="$(command -v uicache || true)"; fi
+            if [ -n "$UICACHE" ] && [ -x "$UICACHE" ]; then "$UICACHE" -u "$APP" || true; fi
+        fi
+        ;;
+esac
+exit 0

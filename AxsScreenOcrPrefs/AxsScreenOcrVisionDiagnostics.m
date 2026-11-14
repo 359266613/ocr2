@@ -10,7 +10,7 @@ static BOOL axs_screenocr_diagnosticRunning = NO;
 + (void)axs_screenocr_runFromController:(UIViewController *)controller {
     if (axs_screenocr_diagnosticRunning) return;
     UIAlertController *confirm = [UIAlertController alertControllerWithTitle:@"Vision 环境对照"
-        message:@"将用同一张中英文测试图比较 helper 与设置进程。设置进程直接加载系统模型，若框架崩溃，设置可能退出；不会在 SpringBoard 内运行 Vision。"
+        message:@"将用同一张中英文测试图比较独立工作应用与设置进程，期间会切换应用。设置进程直接加载系统模型，若框架崩溃，设置可能退出；不会在 SpringBoard 内运行 Vision。"
         preferredStyle:UIAlertControllerStyleAlert];
     [confirm addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
     [confirm addAction:[UIAlertAction actionWithTitle:@"开始" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
@@ -75,24 +75,24 @@ static BOOL axs_screenocr_diagnosticRunning = NO;
         [self axs_screenocr_showResult:@"无法保存诊断图片。" controller:controller];
         return;
     }
-    note([NSString stringWithFormat:@"sample=%@ bytes=%lu; helper and Preferences decode this same PNG, split=0",
+    note([NSString stringWithFormat:@"sample=%@ bytes=%lu; UIKit worker and Preferences use identical PNG bytes, split=0",
           path, (unsigned long)png.length]);
 
     UIAlertController *progress = [UIAlertController alertControllerWithTitle:@"正在对照"
-        message:@"helper → 设置进程" preferredStyle:UIAlertControllerStyleAlert];
+        message:@"工作应用 → 设置进程" preferredStyle:UIAlertControllerStyleAlert];
     [controller presentViewController:progress animated:YES completion:nil];
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         @autoreleasepool {
             NSString *summary = nil;
             @try {
-                note(@"stage=helper begin");
-                NSError *helperError = nil;
-                NSArray<AxsScreenOcrLine *> *helperLines = axs_screenocr_recognize_single_image_at_path(path, &helperError);
-                note([NSString stringWithFormat:@"stage=helper end success=%d lines=%lu error=%@",
-                      helperLines != nil, (unsigned long)helperLines.count,
-                      helperError ? axs_screenocr_vision_describe_error(helperError) : @"none"]);
+                note(@"stage=UIKitWorker begin");
+                NSError *workerError = nil;
+                NSArray<AxsScreenOcrLine *> *workerLines = axs_screenocr_recognize_single_image_at_path(path, &workerError);
+                note([NSString stringWithFormat:@"stage=UIKitWorker end success=%d lines=%lu error=%@",
+                      workerLines != nil, (unsigned long)workerLines.count,
+                      workerError ? axs_screenocr_vision_describe_error(workerError) : @"none"]);
                 // Log the synthetic result only; production screenshots are never logged.
-                note([NSString stringWithFormat:@"helper sample text=%@", [helperLines valueForKey:@"text"]]);
+                note([NSString stringWithFormat:@"worker sample text=%@", [workerLines valueForKey:@"text"]]);
                 CGImageSourceRef source = CGImageSourceCreateWithURL((__bridge CFURLRef)[NSURL fileURLWithPath:path], NULL);
                 CGImageRef image = source ? CGImageSourceCreateImageAtIndex(source, 0, NULL) : NULL;
                 if (source) CFRelease(source);
@@ -112,14 +112,14 @@ static BOOL axs_screenocr_diagnosticRunning = NO;
                         preferencesLines != nil, (unsigned long)preferencesLines.count,
                         preferencesError ? axs_screenocr_vision_describe_error(preferencesError) : @"none"]);
                     note([NSString stringWithFormat:@"Preferences sample text=%@", [preferencesLines valueForKey:@"text"]]);
-                    if (preferencesLines.count && !helperLines.count) {
-                        summary = @"设置进程能识别，helper 未识别出文字。优先排查 helper 的运行环境，暂不调整截图和分块。";
-                    } else if (!preferencesLines.count && helperLines.count) {
-                        summary = @"helper 能识别，设置进程未识别出文字。请对照两侧错误及宿主环境。";
-                    } else if (preferencesLines.count && helperLines.count) {
+                    if (preferencesLines.count && !workerLines.count) {
+                        summary = @"设置进程能识别，独立工作应用未识别出文字。请对照工作应用的启动、接收任务与模型日志。";
+                    } else if (!preferencesLines.count && workerLines.count) {
+                        summary = @"独立工作应用能识别，设置进程未识别出文字。请对照两侧错误及宿主环境。";
+                    } else if (preferencesLines.count && workerLines.count) {
                         summary = @"两个进程均返回文字。还需核对诊断日志中的中英文准确性，再测试实际截图。";
                     } else {
-                        summary = @"两个进程均未识别出文字。不能归因于 helper 独有问题，请查看两侧模型错误。";
+                        summary = @"两个应用进程均未识别出文字。请查看两侧模型错误。";
                     }
                 }
                 note(summary);

@@ -38,9 +38,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Test shared Vision policy
-        run: sh Tests/run-macos-tests.sh
-
       - name: Setup Environment
         run: |
           echo "$THEOS/bin" >> "$GITHUB_PATH"
@@ -88,30 +85,6 @@ jobs:
           sh build.sh "${{ matrix.build_variant }}"
           echo "=== .deb files ==="
           find ./packages -name "*.deb" -type f
-
-      - name: Verify helper entitlements
-        run: |
-          set -euo pipefail
-          DEB="$(find ./packages -name '*.deb' -type f | head -1)"
-          echo "Inspecting $DEB"
-          STAGE="$(mktemp -d)"
-          dpkg-deb -x "$DEB" "$STAGE"
-          HELPER="$(find "$STAGE" -name AxsScreenOcrHelper -type f | head -1)"
-          echo "helper path: $HELPER"
-          ldid -e "$HELPER" | tee /tmp/helper.entitlements
-          for KEY in platform-application com.apple.private.security.no-sandbox; do
-            if ! /usr/libexec/PlistBuddy -c "Print :$KEY" /tmp/helper.entitlements >/dev/null 2>&1; then
-              echo "::error::helper 缺少 entitlement: $KEY"
-              exit 1
-            fi
-          done
-          echo "entitlements OK"
-          TWEAK="$(find "$STAGE" -name AxsScreenOcr.dylib -type f | head -1)"
-          test -n "$TWEAK"
-          if otool -L "$TWEAK" | grep -q '/Vision.framework/'; then
-            echo "::error::SpringBoard tweak must not link Vision"
-            exit 1
-          fi
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4

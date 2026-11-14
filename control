@@ -6,6 +6,6 @@ Description: 深链接触发全屏文字识别，结果可编辑、复制与分�
 Maintainer: Axs
 Author: Axs
 Section: Axs-Tweaks
-Depends: mobilesubstrate, preferenceloader
+Depends: mobilesubstrate, preferenceloader, uikittools
 Icon: https://axs66.github.io/pro/icon/screenocr.png
 Sileodepiction: https://axs66.github.io/pro/sileodepiction/screenocr/js.json

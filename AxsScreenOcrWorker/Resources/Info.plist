@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key><string>com.axs.screenocr.worker</string>
+    <key>CFBundleExecutable</key><string>AxsScreenOcrWorker</string>
+    <key>CFBundleName</key><string>AxsScreenOcrWorker</string>
+    <key>CFBundleDisplayName</key><string>全屏OCR工作器</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleVersion</key><string>5.2.0</string>
+    <key>CFBundleShortVersionString</key><string>5.2.0</string>
+    <key>LSRequiresIPhoneOS</key><true/>
+    <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
+    <key>UIRequiresFullScreen</key><true/>
+    <key>UISupportedInterfaceOrientations</key>
+    <array><string>UIInterfaceOrientationPortrait</string></array>
+    <key>UILaunchScreen</key><dict/>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key><string>com.axs.screenocr.worker.jobs</string>
+            <key>CFBundleURLSchemes</key><array><string>axs-screenocr-worker</string></array>
+        </dict>
+    </array>
+</dict>
+</plist>

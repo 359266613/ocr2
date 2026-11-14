@@ -8,7 +8,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 typedef void (^AxsScreenOcrVisionLogger)(NSString *message);
 
-// Shared by the helper and the explicit Preferences diagnostic, never SpringBoard.
+// Shared by the UIKit worker and Preferences diagnostic, never SpringBoard.
 FOUNDATION_EXPORT NSArray<NSDictionary *> * _Nullable axs_screenocr_vision_recognize(
     CGImageRef _Nullable image, CGImagePropertyOrientation orientation, BOOL split,
     AxsScreenOcrVisionLogger logger, NSError * _Nullable * _Nullable error);

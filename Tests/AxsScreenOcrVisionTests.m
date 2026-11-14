@@ -75,7 +75,7 @@ static CGImageRef axs_screenocr_test_image(size_t height) CF_RETURNS_RETAINED {
     return image;
 }
 
-// Explicit opt-in: model availability on a Mac does not validate an iPhone helper.
+// Explicit opt-in: Mac model availability does not validate the iPhone worker.
 static void axs_screenocr_test_smoke(void) {
     CGImageRef image = axs_screenocr_test_image(2556);
     for (NSUInteger orientation = 1; orientation <= 8; orientation++) {

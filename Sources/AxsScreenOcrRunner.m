@@ -75,7 +75,7 @@ static NSString *axs_screenocr_write_temp_png(UIImage *image) {
             @try {
                 lines = axs_screenocr_recognize_image_at_path(imagePath, orientation, &error);
             } @catch (NSException *exception) {
-                axs_screenocr_log(@"helper invocation exception: %@", exception.reason ?: @"unknown");
+                axs_screenocr_log(@"worker invocation exception: %@", exception.reason ?: @"unknown");
                 error = [NSError errorWithDomain:@"com.axs.screenocr" code:34
                     userInfo:@{NSLocalizedDescriptionKey: @"识别组件调用失败"}];
             } @finally {
@@ -88,7 +88,7 @@ static NSString *axs_screenocr_write_temp_png(UIImage *image) {
             error = [NSError errorWithDomain:@"com.axs.screenocr" code:33
                 userInfo:@{NSLocalizedDescriptionKey: @"无法创建临时截图，请检查存储空间和权限"}];
         }
-        axs_screenocr_log(@"helper pass: %lu lines, error=%@",
+        axs_screenocr_log(@"worker pass: %lu lines, error=%@",
                           (unsigned long)lines.count, error.localizedDescription ?: @"none");
 
         NSMutableString *text = [NSMutableString string];
@@ -114,7 +114,7 @@ static NSString *axs_screenocr_write_temp_png(UIImage *image) {
             }
             [AxsScreenOcrResultController
                 axs_screenocr_present_text:[NSString stringWithFormat:
-                    @"%@\n\n请先在插件设置运行「Vision 环境对照测试」。\n详情见 /var/mobile/Library/Logs/AxsScreenOcr.log", message]];
+                    @"%@\n\n请查看 AxsScreenOcr.log 与 AxsScreenOcrWorker.log。\n也可在插件设置运行「Vision 环境对照测试」。", message]];
         });
     });
 }
