@@ -38,6 +38,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Test shared Vision policy
+        run: sh Tests/run-macos-tests.sh
+
       - name: Setup Environment
         run: |
           echo "$THEOS/bin" >> "$GITHUB_PATH"
@@ -103,6 +106,12 @@ jobs:
             fi
           done
           echo "entitlements OK"
+          TWEAK="$(find "$STAGE" -name AxsScreenOcr.dylib -type f | head -1)"
+          test -n "$TWEAK"
+          if otool -L "$TWEAK" | grep -q '/Vision.framework/'; then
+            echo "::error::SpringBoard tweak must not link Vision"
+            exit 1
+          fi
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4

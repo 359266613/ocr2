@@ -86,9 +86,8 @@ static id axs_screenocr_decode_payload(NSData *output) {
     return nil;
 }
 
-NSArray<AxsScreenOcrLine *> *axs_screenocr_recognize_image_at_path(NSString *imagePath,
-                                                                   CGImagePropertyOrientation orientation,
-                                                                   NSError **error) {
+static NSArray<AxsScreenOcrLine *> *axs_screenocr_run_helper(NSString *imagePath,
+    CGImagePropertyOrientation orientation, BOOL single, NSError **error) {
     NSString *helper = axs_screenocr_helper_path();
     if (helper.length == 0 || ![[NSFileManager defaultManager] isExecutableFileAtPath:helper]) {
         if (error) *error = axs_screenocr_error(10, @"识别组件缺失，请重新安装插件");
@@ -115,6 +114,7 @@ NSArray<AxsScreenOcrLine *> *axs_screenocr_recognize_image_at_path(NSString *ima
         (char *)helper.fileSystemRepresentation,
         (char *)imagePath.fileSystemRepresentation,
         (char *)orientationArgument.UTF8String,
+        single ? (char *)"--single" : NULL,
         NULL
     };
 
@@ -212,3 +212,11 @@ NSArray<AxsScreenOcrLine *> *axs_screenocr_recognize_image_at_path(NSString *ima
     return lines;
 }
 
+NSArray<AxsScreenOcrLine *> *axs_screenocr_recognize_image_at_path(NSString *imagePath,
+    CGImagePropertyOrientation orientation, NSError **error) {
+    return axs_screenocr_run_helper(imagePath, orientation, NO, error);
+}
+
+NSArray<AxsScreenOcrLine *> *axs_screenocr_recognize_single_image_at_path(NSString *imagePath, NSError **error) {
+    return axs_screenocr_run_helper(imagePath, kCGImagePropertyOrientationUp, YES, error);
+}

@@ -12,11 +12,15 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic) CGRect box;
 @end
 
-// Vision 只在独立 helper 内执行。
+// This transport only launches the helper; it never executes Vision in its caller.
 FOUNDATION_EXPORT NSArray<AxsScreenOcrLine *> * _Nullable
 axs_screenocr_recognize_image_at_path(NSString *imagePath,
                                       CGImagePropertyOrientation orientation,
                                       NSError **error);
+
+// Same transport, without segmentation, for the explicit host comparison.
+FOUNDATION_EXPORT NSArray<AxsScreenOcrLine *> * _Nullable
+axs_screenocr_recognize_single_image_at_path(NSString *imagePath, NSError **error);
 
 NS_ASSUME_NONNULL_END
 

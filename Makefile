@@ -17,6 +17,6 @@ AxsScreenOcr_LIBRARIES = substrate
 
 include $(THEOS_MAKE_PATH)/tweak.mk
 
-# Vision 只在独立 helper 进程执行。
+# Production OCR stays in the helper; the Preferences diagnostic is explicit.
 SUBPROJECTS += AxsScreenOcrPrefs AxsScreenOcrHelper
 include $(THEOS_MAKE_PATH)/aggregate.mk

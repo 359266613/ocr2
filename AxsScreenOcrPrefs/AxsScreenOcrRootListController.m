@@ -1,6 +1,7 @@
 #import "AxsScreenOcrRootListController.h"
 #import "AxsScreenOcrNotify.h"
 #import "AxsScreenOcrPreferences.h"
+#import "AxsScreenOcrVisionDiagnostics.h"
 #import <Preferences/PSSpecifier.h>
 #import <UIKit/UIKit.h>
 
@@ -23,6 +24,8 @@
         [diagnostics setProperty:@"触发后如果没有任何反应，查看 /var/mobile/Library/Logs/AxsScreenOcr.log。"
                        forKey:@"footerText"];
         [items addObject:diagnostics];
+        [self axs_screenocr_addButton:@"Vision 环境对照测试"
+                               action:@selector(axs_screenocr_test_vision:) to:items];
 
         [items addObject:[PSSpecifier preferenceSpecifierNamed:@"关于我们" target:self
                      set:nil get:nil detail:nil cell:PSGroupCell edit:nil]];
@@ -32,6 +35,10 @@
         _specifiers = items;
     }
     return _specifiers;
+}
+
+- (void)axs_screenocr_test_vision:(id)sender {
+    [AxsScreenOcrVisionDiagnostics axs_screenocr_runFromController:self];
 }
 
 // 面板里的「测试触发」不能走 URL：iOS 16 起 App 进程打开 prefs: 链接会被系统

@@ -108,13 +108,13 @@ static NSString *axs_screenocr_write_temp_png(UIImage *image) {
                 return;
             }
             NSString *message = error.localizedDescription ?: @"未识别到文字";
-            // helper 会把多档分辨率的失败原因串在一起返回，浮层只展示开头，其余进日志。
+            // Full framework error details stay in the log, not the compact overlay.
             if (message.length > 180) {
                 message = [[message substringToIndex:180] stringByAppendingString:@"…"];
             }
             [AxsScreenOcrResultController
                 axs_screenocr_present_text:[NSString stringWithFormat:
-                    @"%@\n\n可尝试：\n· 重新触发一次\n· 详情见 /var/mobile/Library/Logs/AxsScreenOcr.log", message]];
+                    @"%@\n\n请先在插件设置运行「Vision 环境对照测试」。\n详情见 /var/mobile/Library/Logs/AxsScreenOcr.log", message]];
         });
     });
 }
