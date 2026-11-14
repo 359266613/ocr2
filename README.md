@@ -56,7 +56,7 @@ Vision 只在独立 helper 内运行。helper 崩溃或超时会报告错误，�
 
 ## 识别后端
 
-helper 尝试降到 mobile 用户，使用 CPU 后端、Accurate 模式及简体中文和英文，按不同分辨率重试。此前该设备上的 helper 已出现模型和像素缓冲初始化失败，隔离不代表 OCR 已恢复；需要实机验证。结果管道只接收 stdout，helper 的 stderr 写入 `AxsScreenOcrHelper.log`。
+helper 尝试使用 mobile 用户身份，使用系统默认计算后端、Accurate 模式、简体中文和英文，并关闭语言纠正，按不同分辨率重试。这些请求设置参考了 ShellX 可确认的 Vision 路径，但独立 helper 的进程环境不同，不能保证有相同结果。此前该设备的 helper 出现模型和像素缓冲初始化失败，需要实机验证。结果管道只接收 stdout，helper 的 stderr 写入 `AxsScreenOcrHelper.log`。
 
 主日志记录截图尺寸和组件状态，不保存识别正文。截图临时写入缓存目录，正常完成、失败或超时后删除；如果 SpringBoard 本身意外退出，临时文件可能残留。
 

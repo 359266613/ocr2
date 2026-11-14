@@ -2,6 +2,7 @@
 #import <CoreGraphics/CoreGraphics.h>
 #import <ImageIO/ImageIO.h>
 #import <Vision/Vision.h>
+#import <errno.h>
 #import <math.h>
 #import <stdio.h>
 #import <stdlib.h>
@@ -61,7 +62,8 @@ static int axs_screenocr_helper_fail(NSString *message, int code) {
     return code;
 }
 
-// 使用 CPU 请求；是否能成功加载模型由运行环境决定。
+// 与分析到的 ShellX Vision 请求一致：Accurate、关闭语言纠正，
+// 不强制 CPU；在独立进程中运行以隔离系统框架崩溃。
 static VNRecognizeTextRequest *axs_screenocr_helper_request(void) {
     VNRecognizeTextRequest *request = [[VNRecognizeTextRequest alloc] init];
     if (@available(iOS 16.0, *)) {
@@ -70,15 +72,11 @@ static VNRecognizeTextRequest *axs_screenocr_helper_request(void) {
         request.revision = VNRecognizeTextRequestRevision2;
     }
     request.recognitionLevel = VNRequestTextRecognitionLevelAccurate;
-    request.usesLanguageCorrection = YES;
+    request.usesLanguageCorrection = NO;
     request.recognitionLanguages = @[ @"zh-Hans", @"en-US" ];
     if (@available(iOS 16.0, *)) {
         request.automaticallyDetectsLanguage = NO;
     }
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    request.usesCPUOnly = YES;
-#pragma clang diagnostic pop
     return request;
 }
 
@@ -128,6 +126,9 @@ static BOOL axs_screenocr_helper_perform(CGImageRef image,
         VNImageRequestHandler *handler =
             [[VNImageRequestHandler alloc] initWithCGImage:image orientation:orientation options:@{}];
         request = axs_screenocr_helper_request();
+        axs_screenocr_helper_note(@"vision revision=%lu level=accurate correction=0 backend=system languages=%@",
+                                  (unsigned long)request.revision,
+                                  [request.recognitionLanguages componentsJoinedByString:@","]);
         succeeded = [handler performRequests:@[ request ] error:&error];
     } @catch (NSException *exception) {
         if (outError) {
@@ -190,14 +191,17 @@ static void axs_screenocr_helper_selftest(void) {
 // main 是工具链固定入口名，按约定保留原名。
 int main(int argc, char *argv[]) {
     @autoreleasepool {
-        // helper 由 SpringBoard（root）posix_spawn，默认继承 uid 0。
-        // Vision 依赖的 ANE 缓存目录归 mobile 所有，aned 的 XPC 也会校验调用者身份，
-        // root 的裸进程会加载模型失败。降到 mobile 后走正常路径。
-        setgid(501);
-        setuid(501);
+        // 保留 mobile 身份尝试，同时记录实际身份和切换结果。
+        int gidResult = setgid(501);
+        int gidError = gidResult == 0 ? 0 : errno;
+        int uidResult = setuid(501);
+        int uidError = uidResult == 0 ? 0 : errno;
 
         axs_screenocr_helper_open_log();
         axs_screenocr_helper_note(@"--- helper start pid=%d", (int)getpid());
+        axs_screenocr_helper_note(@"identity uid=%u euid=%u gid=%u egid=%u setuid=%d/%d setgid=%d/%d",
+                                  (unsigned)getuid(), (unsigned)geteuid(), (unsigned)getgid(), (unsigned)getegid(),
+                                  uidResult, uidError, gidResult, gidError);
 
         if (argc < 2) return axs_screenocr_helper_fail(@"missing image path", 2);
 
