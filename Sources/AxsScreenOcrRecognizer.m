@@ -26,19 +26,19 @@ static NSError *axs_screenocr_error(NSInteger code, NSString *message) {
                            userInfo:@{NSLocalizedDescriptionKey: message}];
 }
 
-static VNRecognizeTextRequest *axs_screenocr_make_request(BOOL automatic) {
+static VNRecognizeTextRequest *axs_screenocr_make_request(NSUInteger revision, BOOL cpuOnly) {
     VNRecognizeTextRequest *request = [[VNRecognizeTextRequest alloc] init];
-    if (@available(iOS 16.0, *)) {
-        request.revision = VNRecognizeTextRequestRevision3;
-    } else if (@available(iOS 14.0, *)) {
-        request.revision = VNRecognizeTextRequestRevision2;
-    }
+    request.revision = revision;
     request.recognitionLevel = VNRequestTextRecognitionLevelAccurate;
     request.usesLanguageCorrection = YES;
     request.recognitionLanguages = @[ @"zh-Hans", @"en-US" ];
     if (@available(iOS 16.0, *)) {
-        request.automaticallyDetectsLanguage = automatic;
+        request.automaticallyDetectsLanguage = NO;
     }
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    request.usesCPUOnly = cpuOnly;
+#pragma clang diagnostic pop
     return request;
 }
 
@@ -111,61 +111,52 @@ NSArray<AxsScreenOcrLine *> *axs_screenocr_recognize_cgimage(CGImageRef image,
         return nil;
     }
 
-    NSError *requestError = nil;
-    BOOL succeeded = NO;
-    VNRecognizeTextRequest *request = nil;
-
-    @try {
-        VNImageRequestHandler *handler =
-            [[VNImageRequestHandler alloc] initWithCGImage:image orientation:orientation options:@{}];
-        request = axs_screenocr_make_request(NO);
-        axs_screenocr_log_request(request, @"explicit");
-        succeeded = [handler performRequests:@[ request ] error:&requestError];
-        if (succeeded) {
-            axs_screenocr_log_results(request, @"explicit");
-            axs_screenocr_log(@"vision selected=explicit");
-        } else {
-            axs_screenocr_log(@"vision explicit failed: domain=%@ code=%ld message=%@",
-                              requestError.domain ?: @"unknown", (long)requestError.code,
-                              requestError.localizedDescription ?: @"unknown");
-        }
-
-        if (@available(iOS 16.0, *)) {
-          @try {
-            VNRecognizeTextRequest *comparison = axs_screenocr_make_request(YES);
-            NSError *comparisonError = nil;
-            axs_screenocr_log_request(comparison, @"automatic");
-            BOOL comparisonSucceeded = [handler performRequests:@[ comparison ] error:&comparisonError];
-            if (comparisonSucceeded) {
-                axs_screenocr_log_results(comparison, @"automatic");
-                if (!succeeded) {
-                    request = comparison;
-                    succeeded = YES;
-                    requestError = nil;
-                    axs_screenocr_log(@"vision selected=automatic (explicit failed)");
+    NSError *lastError = nil;
+    NSArray<AxsScreenOcrLine *> *emptyResult = nil;
+    NSUInteger revisions[] = { VNRecognizeTextRequestRevision2, 0 };
+    NSUInteger count = 1;
+    if (@available(iOS 16.0, *)) {
+        revisions[1] = VNRecognizeTextRequestRevision3;
+        count = 2;
+    }
+    for (NSUInteger i = 0; i < count; i++) {
+        for (NSUInteger backend = 0; backend < 2; backend++) {
+            BOOL cpuOnly = backend == 1;
+            NSString *name = [NSString stringWithFormat:@"r%lu-%@", (unsigned long)revisions[i],
+                              cpuOnly ? @"cpu" : @"default"];
+            @autoreleasepool {
+                @try {
+                    VNRecognizeTextRequest *request = axs_screenocr_make_request(revisions[i], cpuOnly);
+                    axs_screenocr_log_request(request, name);
+                    VNImageRequestHandler *handler =
+                        [[VNImageRequestHandler alloc] initWithCGImage:image orientation:orientation options:@{}];
+                    NSError *requestError = nil;
+                    if ([handler performRequests:@[ request ] error:&requestError]) {
+                        axs_screenocr_log_results(request, name);
+                        NSArray<AxsScreenOcrLine *> *lines = axs_screenocr_lines_from_request(request);
+                        if (lines.count) {
+                            axs_screenocr_log(@"vision selected=%@", name);
+                            return lines;
+                        }
+                        emptyResult = lines;
+                        axs_screenocr_log(@"vision %@ returned no text", name);
+                    } else {
+                        lastError = requestError ?: axs_screenocr_error(32, @"Vision 未返回错误详情");
+                        NSError *underlying = lastError.userInfo[NSUnderlyingErrorKey];
+                        axs_screenocr_log(@"vision %@ failed: domain=%@ code=%ld message=%@ underlying=%@",
+                                          name, lastError.domain, (long)lastError.code,
+                                          lastError.localizedDescription, underlying ?: @"none");
+                    }
+                } @catch (NSException *exception) {
+                    lastError = axs_screenocr_error(31, exception.reason ?: @"识别异常");
+                    axs_screenocr_log(@"vision %@ threw: %@", name, exception.reason ?: @"unknown");
                 }
-            } else {
-                axs_screenocr_log(@"vision automatic failed: domain=%@ code=%ld message=%@",
-                                  comparisonError.domain ?: @"unknown", (long)comparisonError.code,
-                                  comparisonError.localizedDescription ?: @"unknown");
             }
-          } @catch (NSException *exception) {
-            axs_screenocr_log(@"vision automatic threw: %@", exception.reason ?: @"unknown");
-          }
         }
-    } @catch (NSException *exception) {
-        if (error) *error = axs_screenocr_error(31, exception.reason ?: @"识别异常");
-        axs_screenocr_log(@"in-process recognition threw: %@", exception.reason ?: @"(nil)");
-        return nil;
     }
-
-    if (!succeeded) {
-        NSString *message = requestError.localizedDescription ?: @"识别失败";
-        if (error) *error = axs_screenocr_error(32, message);
-        axs_screenocr_log(@"in-process recognition failed: %@", message);
-        return nil;
-    }
-    return axs_screenocr_lines_from_request(request);
+    if (emptyResult) return emptyResult;
+    if (error) *error = lastError ?: axs_screenocr_error(32, @"识别失败");
+    return nil;
 }
 
 

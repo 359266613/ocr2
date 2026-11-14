@@ -90,11 +90,12 @@ static NSString *axs_screenocr_write_temp_png(UIImage *image) {
                 if (fallback.count > 0) {
                     lines = fallback;
                     error = nil;
-                } else if (fallbackError) {
+                } else if (fallbackError && !error) {
                     error = fallbackError;
                 }
-                axs_screenocr_log(@"helper fallback: %lu lines",
-                                  (unsigned long)fallback.count);
+                axs_screenocr_log(@"helper fallback: %lu lines, error=%@",
+                                  (unsigned long)fallback.count,
+                                  fallbackError.localizedDescription ?: @"none");
             }
         }
 

@@ -56,11 +56,11 @@ Vision 优先在 SpringBoard 内运行；无结果时才启动 helper 兜底。�
 
 ## 识别后端
 
-主路径使用 Accurate 模式，iOS 16 及以上选用 revision 3，iOS 14/15 选用 revision 2，明确指定简体中文和英文，关闭自动语言检测。iOS 16 及以上还对同一张图运行自动检测作诊断对照；正常情况下展示指定语言的结果，对照结果只记录统计信息。对照会增加耗时。
+主路径使用 Accurate 模式，明确指定简体中文和英文，关闭自动语言检测。依次尝试 revision 2 的系统默认和 CPU 后端；iOS 16 及以上再尝试 revision 3 的两个后端，取得非空结果即停止。所有尝试均失败或无文字时才进入 helper。不同设备的后端可用性需要实机验证。
 
 helper 仅在主路径无结果时运行，尝试降到 mobile 用户并使用 CPU 后端，按不同分辨率重试 Accurate。结果管道只接收 stdout，helper 的 stderr 写入 `AxsScreenOcrHelper.log`。
 
-日志包含截图像素尺寸、请求 revision、支持语言、两组识别行数、中文字符数、异常字符数和平均置信度，不保存识别正文或主路径截图。helper 兜底会临时写入截图，调用结束后删除。
+日志包含截图像素尺寸、请求 revision、支持语言、各次识别行数、中文字符数、异常字符数和平均置信度，不保存识别正文或主路径截图。helper 兜底会临时写入截图，调用结束后删除。
 
 ## 日志
 
@@ -78,7 +78,7 @@ helper 仅在主路径无结果时运行，尝试降到 mobile 用户并使用 C
 | `url seen via ...（未匹配触发词）` | URL 到了，但关键词不对 |
 | `capture: _UICreateScreenUIImage size=...` | 抓图成功 |
 | `capture pixels=...` | 截图像素尺寸、缩放与方向 |
-| `vision explicit` / `vision automatic` | 指定语言与自动检测的请求配置和统计 |
+| `vision r2-default` / `vision r2-cpu` | 各 revision 和后端的请求配置、结果或错误 |
 | `vision selected=...` | 最终使用的识别路径 |
 | `recognize finished: N lines, M chars` | 识别完成 |
 | `trigger ignored: plugin disabled` | 面板里没启用 |
