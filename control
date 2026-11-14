@@ -2,7 +2,7 @@ Package: com.axs.screenocr
 Name: 全屏OCR
 Version: 5.2.0
 Architecture: iphoneos-arm
-Description: 深链接或手势触发全屏文字识别，结果可编辑、复制与分享
+Description: 深链接触发全屏文字识别，结果可编辑、复制与分享
 Maintainer: Axs
 Author: Axs
 Section: Axs-Tweaks
