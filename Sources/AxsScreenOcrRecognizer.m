@@ -91,23 +91,34 @@ static NSArray<AxsScreenOcrLine *> *axs_screenocr_run_worker(NSString *imagePath
         dispatch_async(dispatch_get_main_queue(), ^{
             @synchronized (lock) {
                 if (cancelled || NSProcessInfo.processInfo.systemUptime >= deadline) return;
-                @try {
-                    NSString *caller = NSBundle.mainBundle.bundleIdentifier;
-                    previousApplication = [caller isEqualToString:@"com.apple.springboard"]
-                        ? axs_screenocr_front_application() : caller;
-                    [UIApplication.sharedApplication openURL:url options:@{} completionHandler:^(BOOL accepted) {
-                        @synchronized (lock) {
-                            if (cancelled) return;
-                            launchFinished = YES;
-                            launchAccepted = accepted;
-                        }
-                        axs_screenocr_log(@"worker launch id=%@ accepted=%d", identifier, accepted);
-                    }];
-                } @catch (NSException *exception) {
+            }
+            @try {
+                axs_screenocr_log(@"worker foreground snapshot begin id=%@", identifier);
+                NSString *caller = NSBundle.mainBundle.bundleIdentifier;
+                NSString *front = [caller isEqualToString:@"com.apple.springboard"]
+                    ? axs_screenocr_front_application() : caller;
+                axs_screenocr_log(@"worker foreground snapshot end id=%@ previous=%@", identifier, front ?: @"none");
+                @synchronized (lock) {
+                    if (cancelled || NSProcessInfo.processInfo.systemUptime >= deadline) return;
+                    previousApplication = front;
+                }
+                // Framework calls and their callbacks must not execute while holding the state lock.
+                axs_screenocr_log(@"worker openURL begin id=%@", identifier);
+                [UIApplication.sharedApplication openURL:url options:@{} completionHandler:^(BOOL accepted) {
+                    @synchronized (lock) {
+                        if (cancelled) return;
+                        launchFinished = YES;
+                        launchAccepted = accepted;
+                    }
+                    axs_screenocr_log(@"worker launch id=%@ accepted=%d", identifier, accepted);
+                }];
+                axs_screenocr_log(@"worker openURL returned id=%@", identifier);
+            } @catch (NSException *exception) {
+                @synchronized (lock) {
                     launchFinished = YES;
                     launchAccepted = NO;
-                    axs_screenocr_log(@"worker launch exception: %@", exception.reason ?: exception.name);
                 }
+                axs_screenocr_log(@"worker launch exception: %@", exception.reason ?: exception.name);
             }
         });
         BOOL acknowledged = NO;
@@ -146,7 +157,7 @@ static NSArray<AxsScreenOcrLine *> *axs_screenocr_run_worker(NSString *imagePath
             restore = previousApplication;
         }
         axs_screenocr_job_remove(identifier);
-        dispatch_sync(dispatch_get_main_queue(), ^{
+        dispatch_async(dispatch_get_main_queue(), ^{
             axs_screenocr_restore_application(restore);
         });
     }

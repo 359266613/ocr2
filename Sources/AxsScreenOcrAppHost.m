@@ -5,13 +5,37 @@
 #import <objc/runtime.h>
 #import <SpringBoardServices/SpringBoardServices.h>
 
+@protocol AxsScreenOcrApplicationIdentity <NSObject>
+- (NSString *)bundleIdentifier;
+@end
+
+@interface UIApplication (AxsScreenOcrForeground)
+- (id<AxsScreenOcrApplicationIdentity>)_accessibilityFrontMostApplication;
+- (id<AxsScreenOcrApplicationIdentity>)frontMostApplication;
+@end
+
 @interface LSApplicationWorkspace : NSObject
 + (instancetype)defaultWorkspace;
 - (void)openApplicationWithBundleID:(NSString *)identifier;
 @end
 
 NSString *axs_screenocr_front_application(void) {
+    if (!NSThread.isMainThread) return nil;
     @try {
+        if ([NSBundle.mainBundle.bundleIdentifier isEqualToString:@"com.apple.springboard"]) {
+            // SBS is a synchronous client of SpringBoard; never call it from its own main thread.
+            UIApplication *springBoard = UIApplication.sharedApplication;
+            id<AxsScreenOcrApplicationIdentity> front = nil;
+            if ([springBoard respondsToSelector:@selector(_accessibilityFrontMostApplication)]) {
+                front = [springBoard _accessibilityFrontMostApplication];
+            }
+            if (!front && [springBoard respondsToSelector:@selector(frontMostApplication)]) {
+                front = [springBoard frontMostApplication];
+            }
+            if (![front respondsToSelector:@selector(bundleIdentifier)]) return nil;
+            NSString *identifier = [front bundleIdentifier];
+            return [identifier isKindOfClass:NSString.class] ? [identifier copy] : nil;
+        }
         // Theos leaves this Copy-owned return value unannotated.
         return CFBridgingRelease((__bridge CFStringRef)SBSCopyFrontmostApplicationDisplayIdentifier());
     } @catch (NSException *exception) {

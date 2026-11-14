@@ -3,7 +3,14 @@ set -eu
 case "${1:-}" in
     remove|deconfigure)
         PACKAGE="${DPKG_MAINTSCRIPT_PACKAGE:-com.axs.screenocr}"
-        INFO="$(dpkg-query -L "$PACKAGE" | awk '/\/Applications\/AxsScreenOcrWorker[.]app\/Info[.]plist$/ { print; exit }')"
+        FILES="$(dpkg-query -L "$PACKAGE")"
+        INFO="$(printf '%s\n' "$FILES" | while IFS= read -r FILE; do
+            case "$FILE" in
+                */Applications/AxsScreenOcrWorker.app/Info.plist)
+                    printf '%s\n' "$FILE"
+                    ;;
+            esac
+        done)"
         if [ -n "$INFO" ]; then
             APP="${INFO%/Info.plist}"
             PREFIX="${APP%/Applications/AxsScreenOcrWorker.app}"
