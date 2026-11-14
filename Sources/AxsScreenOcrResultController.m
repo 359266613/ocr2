@@ -24,8 +24,8 @@ static UIWindow *axsScreenOcrOverlayWindow = nil;
         return;
     }
 
-    AxsScreenOcrResultController *controller =
-        [[AxsScreenOcrResultController alloc] axs_screenocr_initWithText:text];
+    AxsScreenOcrResultController *controller = [[AxsScreenOcrResultController alloc] init];
+    controller.recognizedText = [text copy];
 
     UIWindow *window = [[UIWindow alloc] initWithWindowScene:scene];
     window.windowLevel = UIWindowLevelAlert + 20;
@@ -47,14 +47,6 @@ static UIWindow *axsScreenOcrOverlayWindow = nil;
 
 + (BOOL)axs_screenocr_is_presenting {
     return axsScreenOcrOverlayWindow != nil;
-}
-
-- (instancetype)axs_screenocr_initWithText:(NSString *)text {
-    self = [super initWithNibName:nil bundle:nil];
-    if (self) {
-        _recognizedText = [text copy];
-    }
-    return self;
 }
 
 - (void)viewDidLoad {

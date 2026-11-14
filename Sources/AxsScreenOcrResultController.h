@@ -10,8 +10,6 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)axs_screenocr_dismiss_overlay;
 + (BOOL)axs_screenocr_is_presenting;
 
-- (instancetype)axs_screenocr_initWithText:(NSString *)text;
-
 @end
 
 NS_ASSUME_NONNULL_END
