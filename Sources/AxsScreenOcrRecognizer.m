@@ -13,8 +13,7 @@ extern char **environ;
 
 
 static NSString * const AxsScreenOcrErrorDomain = @"com.axs.screenocr";
-// helper 内部会按 1.0 / 0.75 / 0.55 三档分辨率依次尝试，耗时高于单轮识别。
-static const int AxsScreenOcrRecognizeTimeout = 40;
+static const int AxsScreenOcrRecognizeTimeout = 60;
 
 @implementation AxsScreenOcrLine
 @end

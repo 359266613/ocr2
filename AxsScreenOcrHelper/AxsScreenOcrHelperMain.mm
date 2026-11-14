@@ -15,10 +15,6 @@ static NSString * const AxsScreenOcrHelperLogDirectory = @"/var/mobile/Library/L
 static NSString * const AxsScreenOcrHelperLogFile = @"/var/mobile/Library/Logs/AxsScreenOcrHelper.log";
 static const unsigned long long AxsScreenOcrHelperLogLimit = 256 * 1024;
 
-// 屏幕原图长边 2556。Vision 内部会为整幅画面申请一条 420f 的 IOSurface 像素缓冲，
-// 尺寸越大越容易被系统拒绝；缩到 2048 以内对中文识别几乎没有影响，但显著降低失败率。
-static const CGFloat AxsScreenOcrHelperMaxEdge = 2048.0;
-
 static void axs_screenocr_helper_note(NSString *format, ...) {
     va_list args;
     va_start(args, format);
@@ -73,10 +69,45 @@ static VNRecognizeTextRequest *axs_screenocr_helper_request(void) {
     }
     request.recognitionLevel = VNRequestTextRecognitionLevelAccurate;
     request.usesLanguageCorrection = NO;
-    request.recognitionLanguages = @[ @"zh-Hans", @"en-US" ];
     if (@available(iOS 16.0, *)) {
         request.automaticallyDetectsLanguage = NO;
     }
+    NSError *languageError = nil;
+    NSArray<NSString *> *supported;
+    if (@available(iOS 15.0, *)) {
+        supported = [request supportedRecognitionLanguagesAndReturnError:&languageError];
+    } else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        supported = [VNRecognizeTextRequest supportedRecognitionLanguagesForTextRecognitionLevel:request.recognitionLevel
+                                                                                       revision:request.revision error:&languageError];
+#pragma clang diagnostic pop
+    }
+    NSMutableArray<NSString *> *languages = [NSMutableArray array];
+    NSArray<NSString *> *preferred = [NSLocale preferredLanguages];
+    for (NSString *preferredLanguage in [preferred arrayByAddingObjectsFromArray:@[@"zh-Hans", @"zh-Hant", @"en-US"]]) {
+        NSString *match = nil;
+        for (NSString *candidate in supported) {
+            if ([candidate caseInsensitiveCompare:preferredLanguage] == NSOrderedSame) {
+                match = candidate;
+                break;
+            }
+        }
+        if (!match) {
+            NSString *prefix = [[preferredLanguage componentsSeparatedByString:@"-"] firstObject];
+            for (NSString *candidate in supported) {
+                if ([[[candidate componentsSeparatedByString:@"-"] firstObject] caseInsensitiveCompare:prefix] == NSOrderedSame) {
+                    match = candidate;
+                    break;
+                }
+            }
+        }
+        if (match && ![languages containsObject:match]) [languages addObject:match];
+    }
+    if (languages.count) request.recognitionLanguages = languages;
+    axs_screenocr_helper_note(@"supported languages=%@ error=%@",
+                              [supported componentsJoinedByString:@","] ?: @"unknown",
+                              languageError.localizedDescription ?: @"none");
     return request;
 }
 
@@ -88,28 +119,6 @@ static NSString *axs_screenocr_helper_describe(NSError *error) {
         [text appendFormat:@" · %@", underlying.localizedDescription];
     }
     return text;
-}
-
-// 等比缩放。返回 +1 引用，调用方负责 CGImageRelease。
-static CGImageRef axs_screenocr_helper_scaled_copy(CGImageRef image, CGFloat factor) {
-    if (factor >= 0.999) return CGImageRetain(image);
-
-    size_t width = (size_t)llround(CGImageGetWidth(image) * factor);
-    size_t height = (size_t)llround(CGImageGetHeight(image) * factor);
-    if (width < 64 || height < 64) return CGImageRetain(image);
-
-    CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
-    if (!space) return CGImageRetain(image);
-    CGContextRef context = CGBitmapContextCreate(NULL, width, height, 8, 0, space,
-                                                 kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
-    CGColorSpaceRelease(space);
-    if (!context) return CGImageRetain(image);
-
-    CGContextSetInterpolationQuality(context, kCGInterpolationHigh);
-    CGContextDrawImage(context, CGRectMake(0, 0, (CGFloat)width, (CGFloat)height), image);
-    CGImageRef scaled = CGBitmapContextCreateImage(context);
-    CGContextRelease(context);
-    return scaled ?: CGImageRetain(image);
 }
 
 // 跑一轮识别。返回 YES 表示请求本身跑通了（lines 可能为空，即画面无文字）；
@@ -161,31 +170,19 @@ static BOOL axs_screenocr_helper_perform(CGImageRef image,
     return YES;
 }
 
-// 诊断用：拿一张 128x128 的纯白图跑一次最小识别。
-// 小图也失败表明不能仅通过缩小截图解决，具体原因仍需进一步诊断。
-static void axs_screenocr_helper_selftest(void) {
-    CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
-    if (!space) return;
-    CGContextRef context = CGBitmapContextCreate(NULL, 128, 128, 8, 0, space,
-                                                 kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
-    CGColorSpaceRelease(space);
-    if (!context) {
-        axs_screenocr_helper_note(@"selftest: cannot create context");
-        return;
+static BOOL axs_screenocr_helper_duplicate(NSDictionary *line, NSArray<NSDictionary *> *lines) {
+    CGRect box = CGRectMake([line[@"x"] doubleValue], [line[@"y"] doubleValue],
+                            [line[@"w"] doubleValue], [line[@"h"] doubleValue]);
+    for (NSDictionary *existing in lines) {
+        if (![line[@"text"] isEqualToString:existing[@"text"]]) continue;
+        CGRect other = CGRectMake([existing[@"x"] doubleValue], [existing[@"y"] doubleValue],
+                                  [existing[@"w"] doubleValue], [existing[@"h"] doubleValue]);
+        CGRect intersection = CGRectIntersection(box, other);
+        if (CGRectIsNull(intersection)) continue;
+        CGFloat area = MIN(box.size.width * box.size.height, other.size.width * other.size.height);
+        if (area > 0 && intersection.size.width * intersection.size.height / area >= 0.5) return YES;
     }
-    CGContextSetRGBFillColor(context, 1, 1, 1, 1);
-    CGContextFillRect(context, CGRectMake(0, 0, 128, 128));
-    CGImageRef probe = CGBitmapContextCreateImage(context);
-    CGContextRelease(context);
-    if (!probe) return;
-
-    NSMutableArray<NSDictionary *> *lines = [NSMutableArray array];
-    NSError *error = nil;
-    BOOL performed = axs_screenocr_helper_perform(probe, kCGImagePropertyOrientationUp, lines, &error);
-    axs_screenocr_helper_note(@"selftest 128x128 -> %@", performed
-                              ? @"small image request succeeded"
-                              : axs_screenocr_helper_describe(error));
-    CGImageRelease(probe);
+    return NO;
 }
 
 // main 是工具链固定入口名，按约定保留原名。
@@ -225,56 +222,61 @@ int main(int argc, char *argv[]) {
 
         size_t pixelWidth = CGImageGetWidth(original);
         size_t pixelHeight = CGImageGetHeight(original);
-        CGFloat longest = (CGFloat)MAX(pixelWidth, pixelHeight);
-        CGFloat baseFactor = (longest > AxsScreenOcrHelperMaxEdge) ? (AxsScreenOcrHelperMaxEdge / longest) : 1.0;
-        axs_screenocr_helper_note(@"image %zux%zu, base factor %.3f", pixelWidth, pixelHeight, baseFactor);
-
-        // 从原始分辨率开始逐级缩小。CVPixelBuffer 申请失败多数出现在大尺寸上，
-        // 缩一档往往就能过；识别精度对屏幕文字而言几无损失。
-        CGFloat factors[] = { 1.0, 0.75, 0.55 };
-        NSMutableString *trail = [NSMutableString string];
-        NSMutableArray<NSDictionary *> *lines = [NSMutableArray array];
-        BOOL detectedNothing = NO;
-        BOOL selfTested = NO;
-
-        for (size_t index = 0; index < sizeof(factors) / sizeof(factors[0]); index++) {
-            CGFloat factor = baseFactor * factors[index];
-            CGImageRef scaled = axs_screenocr_helper_scaled_copy(original, factor);
-
-            NSError *error = nil;
-            [lines removeAllObjects];
-            BOOL performed = axs_screenocr_helper_perform(scaled, orientation, lines, &error);
-
-            axs_screenocr_helper_note(@"attempt %.3f at %zux%zu -> %@ (lines=%lu)", factor,
-                                      CGImageGetWidth(scaled), CGImageGetHeight(scaled),
-                                      performed ? @"ok" : @"failed",
-                                      (unsigned long)lines.count);
-            CGImageRelease(scaled);
-
-            if (!performed && !selfTested) {
-                selfTested = YES;
-                axs_screenocr_helper_selftest();
-            }
-
-            if (performed) {
-                // 请求跑通就停下来：有字已经拿到，没字说明画面本身没有可识别文字，
-                // 再缩图重试也不会有结果。
-                if (lines.count == 0) detectedNothing = YES;
-                break;
-            }
-            [trail appendFormat:@"%.0f%% 尺寸失败：%@；", factor * 100.0,
-                                axs_screenocr_helper_describe(error)];
+        NSUInteger parts = 1;
+        if (orientation == kCGImagePropertyOrientationUp && pixelHeight > 1400) {
+            parts = (pixelHeight >= 2000 && pixelHeight > pixelWidth) ? 3 : 2;
         }
-
+        axs_screenocr_helper_note(@"image %zux%zu parts=%lu overlap=0.18",
+                                  pixelWidth, pixelHeight, (unsigned long)parts);
+        NSMutableArray<NSDictionary *> *lines = [NSMutableArray array];
+        BOOL performedAny = NO;
+        NSError *firstError = nil;
+        for (NSUInteger index = 0; index < parts; index++) {
+            CGFloat segment = (CGFloat)pixelHeight / parts;
+            CGFloat top = floor(MAX(0, index * segment - segment * 0.18));
+            CGFloat bottom = ceil(MIN((CGFloat)pixelHeight, (index + 1) * segment + segment * 0.18));
+            CGRect cropRect = CGRectMake(0, top, pixelWidth, bottom - top);
+            CGImageRef crop = parts == 1 ? CGImageRetain(original) : CGImageCreateWithImageInRect(original, cropRect);
+            if (!crop) {
+                axs_screenocr_helper_note(@"part %lu crop failed", (unsigned long)index);
+                if (!firstError) firstError = [NSError errorWithDomain:@"com.axs.screenocr.helper" code:2
+                    userInfo:@{NSLocalizedDescriptionKey: @"无法裁剪截图"}];
+                continue;
+            }
+            NSError *error = nil;
+            NSMutableArray<NSDictionary *> *partLines = [NSMutableArray array];
+            BOOL performed = axs_screenocr_helper_perform(crop, orientation, partLines, &error);
+            CGImageRelease(crop);
+            axs_screenocr_helper_note(@"part %lu/%lu y=%.0f height=%.0f -> %@ lines=%lu",
+                                      (unsigned long)(index + 1), (unsigned long)parts, top, bottom - top,
+                                      performed ? @"ok" : @"failed", (unsigned long)partLines.count);
+            if (!performed) {
+                if (!firstError) firstError = error ?: [NSError errorWithDomain:@"com.axs.screenocr.helper" code:3
+                    userInfo:@{NSLocalizedDescriptionKey: @"Vision 未返回错误详情"}];
+                continue;
+            }
+            performedAny = YES;
+            for (NSDictionary *item in partLines) {
+                NSMutableDictionary *mapped = [item mutableCopy];
+                if (parts > 1) {
+                    CGFloat partHeight = bottom - top;
+                    mapped[@"y"] = @(((CGFloat)pixelHeight - bottom + [item[@"y"] doubleValue] * partHeight) / pixelHeight);
+                    mapped[@"h"] = @([item[@"h"] doubleValue] * partHeight / pixelHeight);
+                }
+                if (!axs_screenocr_helper_duplicate(mapped, lines)) [lines addObject:mapped];
+            }
+        }
         CGImageRelease(original);
 
+        if (firstError) {
+            return axs_screenocr_helper_fail(axs_screenocr_helper_describe(firstError), 8);
+        }
         if (lines.count == 0) {
-            if (detectedNothing) {
+            if (performedAny) {
                 axs_screenocr_helper_note(@"no text in image");
                 return axs_screenocr_helper_fail(@"画面中没有识别到文字", 7);
             }
-            if (trail.length == 0) return axs_screenocr_helper_fail(@"图片来源异常", 7);
-            return axs_screenocr_helper_fail(trail, 8);
+            return axs_screenocr_helper_fail(axs_screenocr_helper_describe(firstError), 8);
         }
 
         // Vision 返回顺序不保证阅读顺序，按行（y 降序）再按列（x 升序）重排。
@@ -290,9 +292,6 @@ int main(int argc, char *argv[]) {
             return leftX < rightX ? NSOrderedAscending : NSOrderedDescending;
         }];
 
-        if (trail.length > 0) {
-            axs_screenocr_helper_note(@"recovered after: %@", trail);
-        }
         axs_screenocr_helper_note(@"done: %lu lines", (unsigned long)lines.count);
         return axs_screenocr_helper_emit(@{ @"ok": @YES, @"lines": lines });
     }
