@@ -237,6 +237,9 @@ NSArray<NSDictionary *> *axs_screenocr_vision_recognize(CGImageRef image,
                 width, height, (unsigned)orientation, (unsigned long)parts]);
         NSMutableArray<NSDictionary *> *lines = [NSMutableArray array];
         for (NSUInteger index = 0; index < parts; index++) {
+            // Keep failures alive across the crop pool; only write the caller's
+            // autoreleasing out-parameter after that pool has drained.
+            NSError *partError = nil;
             @autoreleasepool {
                 CGFloat segment = (CGFloat)height / parts;
                 CGFloat top = parts == 1 ? 0 : floor(MAX(0, index * segment - segment * 0.18));
@@ -244,26 +247,33 @@ NSArray<NSDictionary *> *axs_screenocr_vision_recognize(CGImageRef image,
                 CGFloat cropHeight = ceil(bottom - top);
                 CGImageRef crop = CGImageCreateWithImageInRect(normalized, CGRectMake(0, top, width, cropHeight));
                 if (!crop) {
-                    if (outError) *outError = axs_screenocr_vision_error(6, @"Cannot crop image");
-                    return nil;
+                    partError = axs_screenocr_vision_error(6, @"Cannot crop image");
+                } else {
+                    NSArray<NSDictionary *> *partLines;
+                    @try {
+                        partLines = axs_screenocr_vision_perform(crop, logger, &partError);
+                    } @finally {
+                        CGImageRelease(crop);
+                    }
+                    logger([NSString stringWithFormat:@"part=%lu/%lu top=%.0f height=%.0f success=%d lines=%lu",
+                            (unsigned long)(index + 1), (unsigned long)parts, top, cropHeight,
+                            partLines != nil, (unsigned long)partLines.count]);
+                    if (!partLines) {
+                        if (!partError) partError = axs_screenocr_vision_error(2, @"Vision failed without NSError");
+                    } else {
+                        for (NSDictionary *item in partLines) {
+                            NSMutableDictionary *mapped = [item mutableCopy];
+                            mapped[@"y"] = @((height - top - cropHeight + [item[@"y"] doubleValue] * cropHeight) / height);
+                            mapped[@"h"] = @([item[@"h"] doubleValue] * cropHeight / height);
+                            if (!axs_screenocr_vision_duplicate(mapped, lines)) [lines addObject:mapped];
+                        }
+                    }
                 }
-                NSArray<NSDictionary *> *partLines;
-                @try {
-                    partLines = axs_screenocr_vision_perform(crop, logger, outError);
-                } @finally {
-                    CGImageRelease(crop);
-                }
-                logger([NSString stringWithFormat:@"part=%lu/%lu top=%.0f height=%.0f success=%d lines=%lu",
-                        (unsigned long)(index + 1), (unsigned long)parts, top, cropHeight,
-                        partLines != nil, (unsigned long)partLines.count]);
-                // A model-loading failure is not repaired by retrying other crops.
-                if (!partLines) return nil;
-                for (NSDictionary *item in partLines) {
-                    NSMutableDictionary *mapped = [item mutableCopy];
-                    mapped[@"y"] = @((height - top - cropHeight + [item[@"y"] doubleValue] * cropHeight) / height);
-                    mapped[@"h"] = @([item[@"h"] doubleValue] * cropHeight / height);
-                    if (!axs_screenocr_vision_duplicate(mapped, lines)) [lines addObject:mapped];
-                }
+            }
+            // A model-loading failure is not repaired by retrying other crops.
+            if (partError) {
+                if (outError) *outError = partError;
+                return nil;
             }
         }
         // Strict ordering avoids the old non-transitive "within .01" comparator.
